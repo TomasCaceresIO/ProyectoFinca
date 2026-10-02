@@ -1,0 +1,11 @@
+# ============================================================
+# requirements-prod.txt - Dependencias adicionales para PRODUCCIÓN
+# ============================================================
+# Instalar SOLO en el servidor de producción con PostgreSQL:
+#   pip install -r requirements.txt -r requirements-prod.txt
+
+# PostgreSQL driver (wheel precompilada para producción Linux)
+psycopg2-binary==2.9.10
+
+# Servidor WSGI de producción
+gunicorn==23.0.0
