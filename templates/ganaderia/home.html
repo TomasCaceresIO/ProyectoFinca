@@ -1,13 +1,17 @@
 {% extends 'base.html' %}
 {% load static %}
 
-{% block title %}Inicio - Gestión Ganadera{% endblock %}
+{% block title %}Inicio - Censo Ganadero{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">🐄 Panel de Control</h1>
+        <h1 class="page-title">🐄 Panel de Control y Censo Activo</h1>
         <p class="page-subtitle">{{ explotacion.nombre }} · REGA: {{ explotacion.codigo_rega }}</p>
+    </div>
+    <div class="d-flex gap-1">
+        <a href="{% url 'animal_create' %}" class="btn btn-primary">➕ Registrar Animal</a>
+        <a href="{% url 'parto_create' %}" class="btn btn-outline">🐣 Registrar Parto</a>
     </div>
 </div>
 
@@ -25,39 +29,78 @@
         <div class="stat-value">{{ stats.machos }}</div>
         <div class="stat-label">Machos</div>
     </div>
-    <div class="stat-card" style="border-left: 4px solid var(--color-danger);">
-        <div class="stat-value" style="color: var(--color-danger);">{{ stats.incidencias }}</div>
+    <div class="stat-card" style="border-left: 4px solid var(--color-danger, #ef4444);">
+        <div class="stat-value" style="color: var(--color-danger, #ef4444);">{{ stats.incidencias }}</div>
         <div class="stat-label">Incidencias Activas</div>
     </div>
 </div>
 
-<!-- Accesos rápidos -->
-<div class="grid-2 mb-3">
-    <div class="card">
-        <div class="card-header">📋 Acciones Rápidas</div>
-        <div class="card-body">
-            <div class="d-flex gap-1" style="flex-direction: column;">
-                <a href="{% url 'animal_create' %}" class="btn btn-primary">➕ Registrar Animal</a>
-                <a href="{% url 'parto_create' %}" class="btn btn-outline">🐣 Registrar Parto</a>
-                <a href="{% url 'animal_list' %}" class="btn btn-outline">📊 Ver Todos los Animales</a>
-            </div>
-        </div>
+<!-- Filtros y Grid de Censo Activo -->
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h3>📊 Censo Activo (Filtros Multifactor)</h3>
     </div>
-    <div class="card">
-        <div class="card-header">⚠️ Incidencias Recientes</div>
-        <div class="card-body">
-            {% if incidencias_recientes %}
-            {% for inc in incidencias_recientes %}
-            <div class="alert alert-{% if inc.tipo == 'ROJO' %}danger{% else %}warning{% endif %}" style="margin-bottom: 0.5rem;">
-                <div>
-                    <strong>Crotal {{ inc.animal.crotal }}</strong> · {{ inc.get_tipo_display }}<br>
-                    <small>{{ inc.descripcion }}</small>
-                </div>
+    <div class="card-body">
+        <form id="filter-form" 
+              hx-get="{% url 'home' %}" 
+              hx-target="#animal-grid-tbody" 
+              hx-trigger="change, keyup delay:300ms"
+              class="grid-4 gap-2 mb-3">
+            <div>
+                <label class="form-label"><small>Finca</small></label>
+                <select name="finca" class="form-control">
+                    <option value="">Todas las fincas</option>
+                    {% for f in fincas %}
+                    <option value="{{ f.id }}" {% if filtros.finca_id == f.id|stringformat:"s" %}selected{% endif %}>{{ f.nombre }}</option>
+                    {% endfor %}
+                </select>
             </div>
-            {% endfor %}
-            {% else %}
-            <p class="text-muted text-center">✅ Sin incidencias activas</p>
-            {% endif %}
+            <div>
+                <label class="form-label"><small>Recinto (Sub-ubicación)</small></label>
+                <select name="recinto" class="form-control">
+                    <option value="">Todos los recintos</option>
+                    <option value="PASTO" {% if filtros.recinto == 'PASTO' %}selected{% endif %}>🌱 Pasto</option>
+                    <option value="CEBADERO" {% if filtros.recinto == 'CEBADERO' %}selected{% endif %}>🌾 Cebadero</option>
+                    <option value="APARTADO" {% if filtros.recinto == 'APARTADO' %}selected{% endif %}>🧱 Apartado</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label"><small>Sexo</small></label>
+                <select name="sexo" class="form-control">
+                    <option value="">Ambos sexos</option>
+                    <option value="H" {% if filtros.sexo == 'H' %}selected{% endif %}>Hembra</option>
+                    <option value="M" {% if filtros.sexo == 'M' %}selected{% endif %}>Macho</option>
+                </select>
+            </div>
+            <div>
+                <label class="form-label"><small>Ordenación</small></label>
+                <select name="orden" class="form-control">
+                    <option value="crotal" {% if filtros.orden == 'crotal' %}selected{% endif %}>Crotal</option>
+                    <option value="dias_parto_desc" {% if filtros.orden == 'dias_parto_desc' %}selected{% endif %}>Días desde último parto (desc)</option>
+                    <option value="edad_desc" {% if filtros.orden == 'edad_desc' %}selected{% endif %}>Edad (más viejos primero)</option>
+                </select>
+            </div>
+        </form>
+
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Crotal</th>
+                        <th>Sexo</th>
+                        <th>Raza</th>
+                        <th>Edad</th>
+                        <th>Finca</th>
+                        <th>Recinto</th>
+                        <th>Entrada Cebadero</th>
+                        <th>Último Parto</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody id="animal-grid-tbody">
+                    {% include 'ganaderia/partials/animal_grid_tbody.html' %}
+                </tbody>
+            </table>
         </div>
     </div>
 </div>

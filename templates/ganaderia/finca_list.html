@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+
+{% block title %}Gestión de Fincas y Recintos - Gestión Ganadera{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">🏞️ Gestión de Fincas y Recintos</h1>
+        <p class="page-subtitle">Desglose de ocupación por finca y sub-ubicación (Pasto, Cebadero, Apartado)</p>
+    </div>
+</div>
+
+<div class="grid-2 gap-3">
+    {% for res in resumen_fincas %}
+    <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <h3>🏡 {{ res.finca.nombre }}</h3>
+            <span class="badge badge-info">{{ res.total_animales }} Animales Vivos</span>
+        </div>
+        <div class="card-body">
+            <div class="grid-3 gap-2 mb-3">
+                <div class="p-3 text-center border rounded">
+                    <h4>🌱 Pasto</h4>
+                    <div class="h3 font-weight-bold">{{ res.n_pasto }}</div>
+                    <small class="text-muted">Campo abierto</small>
+                </div>
+                <div class="p-3 text-center border rounded">
+                    <h4>🌾 Cebadero</h4>
+                    <div class="h3 font-weight-bold text-warning">{{ res.n_cebadero }}</div>
+                    <small class="text-muted">Engorde</small>
+                </div>
+                <div class="p-3 text-center border rounded">
+                    <h4>🧱 Apartado</h4>
+                    <div class="h3 font-weight-bold text-secondary">{{ res.n_apartado }}</div>
+                    <small class="text-muted">Aislamiento</small>
+                </div>
+            </div>
+
+            <a href="{% url 'home' %}?finca={{ res.finca.id }}" class="btn btn-outline w-100">
+                🔍 Ver Animales de esta Finca
+            </a>
+        </div>
+    </div>
+    {% empty %}
+    <div class="card w-100">
+        <div class="card-body text-center text-muted py-4">
+            No se han registrado fincas. Configura una finca desde el wizard de inicio.
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endblock %}

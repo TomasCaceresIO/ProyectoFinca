@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+
+{% block title %}Registro de Incidencias - Gestión Ganadera{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">⚠️ Registro de Incidencias y Alertas</h1>
+        <p class="page-subtitle">Gestión de alertas rojas (intervalo &lt; 270d) y alertas amarillas (crotal histórico)</p>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h3>🚨 Incidencias Activas</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Animal</th>
+                        <th>Tipo</th>
+                        <th>Descripción</th>
+                        <th>Fecha Registro</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for inc in incidencias_activas %}
+                    <tr id="incidencia-row-{{ inc.id }}">
+                        <td>
+                            <a href="{% url 'animal_detail' crotal=inc.animal.crotal %}">
+                                <strong>Crotal {{ inc.animal.crotal }}</strong>
+                            </a>
+                        </td>
+                        <td>
+                            {% if inc.tipo == 'ROJO' %}
+                            <span class="badge badge-danger">Alerta Roja (&lt; 270d)</span>
+                            {% else %}
+                            <span class="badge badge-warning">Alerta Amarilla</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ inc.descripcion }}</td>
+                        <td><small>{{ inc.created_at|date:"Y-m-d H:i" }}</small></td>
+                        <td>
+                            <div class="d-flex gap-1">
+                                {% if inc.parto %}
+                                <a href="{% url 'parto_edit' pk=inc.parto.pk %}" class="btn btn-sm btn-outline">✏️ Rectificar Fecha</a>
+                                {% endif %}
+                                <form hx-post="{% url 'incidencia_resolver' pk=inc.pk %}" 
+                                      hx-target="#incidencia-row-{{ inc.id }}" 
+                                      hx-swap="outerHTML" 
+                                      style="display: inline;">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-sm btn-success">✅ Resolver</button>
+                                </form>
+                            </div>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-3">
+                            ✅ No hay incidencias activas en el sistema.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if incidencias_resueltas %}
+<div class="card">
+    <div class="card-header">
+        <h3>✅ Histórico de Incidencias Resueltas</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table text-muted">
+                <thead>
+                    <tr>
+                        <th>Animal</th>
+                        <th>Tipo</th>
+                        <th>Descripción</th>
+                        <th>Fecha</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for inc in incidencias_resueltas %}
+                    <tr>
+                        <td>Crotal {{ inc.animal.crotal }}</td>
+                        <td>{{ inc.get_tipo_display }}</td>
+                        <td>{{ inc.descripcion }}</td>
+                        <td><small>{{ inc.created_at|date:"Y-m-d" }}</small></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

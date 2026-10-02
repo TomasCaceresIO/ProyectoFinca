@@ -1,0 +1,194 @@
+{% extends 'base.html' %}
+
+{% block title %}Animal {{ animal.crotal }} - Ficha Detalle{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <div>
+        <h1 class="page-title">🐄 Animal Crotal {{ animal.crotal }}</h1>
+        <p class="page-subtitle">
+            Estado: 
+            {% if animal.estado_vital == 'VIVO' %}
+            <span class="badge badge-success">VIVO</span>
+            {% else %}
+            <span class="badge badge-danger">BAJA ({{ animal.fecha_baja|date:"Y-m-d" }})</span>
+            {% endif %}
+            · {{ animal.get_sexo_display }} · {{ animal.raza }}
+        </p>
+    </div>
+    <div class="d-flex gap-1">
+        {% if animal.estado_vital == 'VIVO' %}
+            {% if animal.sexo == 'H' %}
+            <a href="{% url 'parto_create' %}?madre={{ animal.crotal }}" class="btn btn-primary">🐣 Registrar Parto</a>
+            {% endif %}
+            <a href="{% url 'animal_traslado' crotal=animal.crotal %}" class="btn btn-outline">🔄 Trasladar Recinto</a>
+            <a href="{% url 'animal_baja' crotal=animal.crotal %}" class="btn btn-danger">❌ Dar de Baja</a>
+        {% endif %}
+        <a href="{% url 'home' %}" class="btn btn-secondary">⬅️ Volver</a>
+    </div>
+</div>
+
+<div class="grid-2 mb-3">
+    <!-- Información General -->
+    <div class="card">
+        <div class="card-header">📋 Datos de Identificación y Ubicación</div>
+        <div class="card-body">
+            <table class="table table-borderless">
+                <tr><th>Crotal:</th><td><strong>{{ animal.crotal }}</strong></td></tr>
+                <tr><th>Sexo:</th><td>{{ animal.get_sexo_display }}</td></tr>
+                <tr><th>Raza:</th><td>{{ animal.raza }}</td></tr>
+                <tr><th>Fecha Nacimiento:</th><td>{{ animal.fecha_nacimiento|date:"Y-m-d" }} ({{ animal.edad_dias }} días)</td></tr>
+                <tr><th>Finca Actual:</th><td>{{ animal.finca.nombre }}</td></tr>
+                <tr>
+                    <th>Recinto (Sub-ubicación):</th>
+                    <td>
+                        {% if animal.sub_ubicacion == 'CEBADERO' %}
+                        <span class="badge badge-warning">🌾 Cebadero</span>
+                        {% elif animal.sub_ubicacion == 'APARTADO' %}
+                        <span class="badge badge-secondary">🧱 Apartado</span>
+                        {% else %}
+                        <span class="badge badge-success">🌱 Pasto</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% if animal.fecha_entrada_cebadero %}
+                <tr><th>Entrada a Cebadero:</th><td>{{ animal.fecha_entrada_cebadero|date:"Y-m-d" }}</td></tr>
+                {% endif %}
+                <tr>
+                    <th>Madre:</th>
+                    <td>
+                        {% if animal.madre %}
+                        <a href="{% url 'animal_detail' crotal=animal.madre.crotal %}">Crotal {{ animal.madre.crotal }}</a>
+                        {% else %}
+                        <span class="text-muted">Desconocida / No registrada</span>
+                        {% endif %}
+                    </td>
+                </tr>
+            </table>
+        </div>
+    </div>
+
+    <!-- Incidencias relativas -->
+    <div class="card">
+        <div class="card-header">⚠️ Incidencias Registradas</div>
+        <div class="card-body">
+            {% if incidencias %}
+                {% for inc in incidencias %}
+                <div class="alert alert-{% if inc.tipo == 'ROJO' %}danger{% else %}warning{% endif %} mb-2">
+                    <strong>{{ inc.get_tipo_display }}</strong>
+                    {% if inc.resuelta %}<span class="badge badge-success float-right">Resuelta</span>{% endif %}
+                    <br>
+                    <small>{{ inc.descripcion }}</small>
+                </div>
+                {% endfor %}
+            {% else %}
+                <p class="text-muted text-center py-3">✅ Sin incidencias para este animal.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<!-- Tabla de Partos (Si es Hembra) -->
+{% if animal.sexo == 'H' %}
+<div class="card mb-3">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h3>🍼 Historial de Partos y Reproducción</h3>
+        {% if animal.estado_vital == 'VIVO' %}
+        <a href="{% url 'parto_create' %}?madre={{ animal.crotal }}" class="btn btn-sm btn-primary">➕ Añadir Parto</a>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Fecha de Parto</th>
+                        <th>Estado de Intervalo</th>
+                        <th>Cría Nacida</th>
+                        <th>Observaciones</th>
+                        <th>Acción</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for parto in partos %}
+                    <tr>
+                        <td><strong>{{ parto.fecha_parto|date:"Y-m-d" }}</strong></td>
+                        <td>
+                            {% if parto.alerta_intervalo %}
+                            <span class="badge badge-danger">⚠️ Alerta &lt; 270 días</span>
+                            {% else %}
+                            <span class="badge badge-success">✅ OK (&ge; 270 días)</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if parto.cria %}
+                            <a href="{% url 'animal_detail' crotal=parto.cria.crotal %}" class="font-weight-bold">
+                                🐮 Crotal {{ parto.cria.crotal }} ({{ parto.cria.get_sexo_display }})
+                            </a>
+                            {% else %}
+                            <span class="text-muted">Sin cría censada</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ parto.observaciones|default:"-" }}</td>
+                        <td>
+                            <a href="{% url 'parto_edit' pk=parto.pk %}" class="btn btn-sm btn-outline">✏️ Modificar Fecha</a>
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="5" class="text-center text-muted py-3">
+                            No hay partos registrados para esta hembra.
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+<!-- Crías Nacidas (Hijos) -->
+{% if animal.hijos.exists %}
+<div class="card mb-3">
+    <div class="card-header">
+        <h3>🐮 Descendencia (Crías registradas como Madre)</h3>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Crotal</th>
+                        <th>Sexo</th>
+                        <th>Fecha Nacimiento</th>
+                        <th>Estado Vital</th>
+                        <th>Finca / Recinto</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for hijo in animal.hijos.all %}
+                    <tr>
+                        <td>
+                            <a href="{% url 'animal_detail' crotal=hijo.crotal %}"><strong>{{ hijo.crotal }}</strong></a>
+                        </td>
+                        <td>{{ hijo.get_sexo_display }}</td>
+                        <td>{{ hijo.fecha_nacimiento|date:"Y-m-d" }}</td>
+                        <td>
+                            {% if hijo.estado_vital == 'VIVO' %}
+                            <span class="badge badge-success">VIVO</span>
+                            {% else %}
+                            <span class="badge badge-danger">BAJA</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ hijo.finca.nombre }} ({{ hijo.sub_ubicacion }})</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+
+{% endblock %}

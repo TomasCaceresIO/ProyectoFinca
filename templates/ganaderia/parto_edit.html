@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+
+{% block title %}Modificar Fecha de Parto{% endblock %}
+
+{% block content %}
+<div style="max-width: 600px; margin: 2rem auto;">
+    <div class="card">
+        <div class="card-header">
+            <h2>✏️ Modificar Parto (Madre Crotal {{ parto.madre.crotal }})</h2>
+        </div>
+        <div class="card-body">
+            <p><strong>Parto actual:</strong> {{ parto.fecha_parto|date:"Y-m-d" }}</p>
+            <p class="text-muted"><small>Al modificar la fecha, el sistema verificará automáticamente el intervalo de 270 días con los partos anterior y posterior más cercanos.</small></p>
+
+            <form method="post">
+                {% csrf_token %}
+                <div class="form-group mb-3">
+                    <label class="form-label">Nueva Fecha de Parto *</label>
+                    {{ form.fecha_parto }}
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label">Observaciones</label>
+                    {{ form.observaciones }}
+                </div>
+
+                <div class="d-flex gap-2 mt-3">
+                    <button type="submit" class="btn btn-primary w-100">💾 Guardar Cambios</button>
+                    <a href="{% url 'animal_detail' crotal=parto.madre.crotal %}" class="btn btn-secondary w-100">Cancelar</a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
