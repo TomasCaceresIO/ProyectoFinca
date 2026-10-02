@@ -10,7 +10,7 @@ Sistema de gestión ganadera desarrollado con Django 5, HTMX y Tailwind CSS para
 
 ---
 
-## 🛠️ Instalación y Arranque Rápido
+## 🛠️ Instalación y Arranque Rápido (Local Python)
 
 1. **Crear y activar el entorno virtual:**
    ```bash
@@ -40,6 +40,32 @@ Sistema de gestión ganadera desarrollado con Django 5, HTMX y Tailwind CSS para
    python manage.py runserver
    ```
    Accede a la aplicación en: [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+---
+
+## 🐳 Despliegue con Docker y PostgreSQL
+
+Para levantar la infraestructura completa encapsulada en contenedores con base de datos PostgreSQL 16:
+
+1. **Levantar todos los servicios con Docker Compose:**
+   ```bash
+   docker compose up --build
+   ```
+
+2. **Cargar datos de demostración en el contenedor:**
+   ```bash
+   docker compose exec web python manage.py seed_demo_data
+   ```
+
+3. **Crear un superusuario de administración:**
+   ```bash
+   docker compose exec web python manage.py createsuperuser
+   ```
+
+4. **Ejecutar la suite completa de tests dentro del contenedor:**
+   ```bash
+   docker compose exec web pytest
+   ```
 
 ---
 

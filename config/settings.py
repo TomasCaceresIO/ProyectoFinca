@@ -51,6 +51,12 @@ MIDDLEWARE = [
     'ganaderia.middleware.OnboardingMiddleware',
 ]
 
+try:
+    import whitenoise
+    MIDDLEWARE.insert(1, 'whitenoise.middleware.WhiteNoiseMiddleware')
+except ImportError:
+    pass
+
 ROOT_URLCONF = 'config.urls'
 
 # --- TEMPLATES ---
