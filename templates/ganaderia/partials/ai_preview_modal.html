@@ -1,0 +1,101 @@
+<div id="ai-preview-modal" class="modal-overlay" style="display: flex;">
+    <div class="modal" style="max-width: 600px;">
+        <div class="modal-header d-flex justify-between align-center">
+            <h3 style="margin: 0; font-size: 1.15rem; display: flex; align-items: center; gap: 0.5rem;">
+                <span>🤖</span> Asistente de IA: Previsualización de Parto
+            </h3>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeAiModal()">✕</button>
+        </div>
+
+        <div class="modal-body">
+            {% if error_general %}
+            <div class="alert alert-danger mb-3" style="background-color: #fee2e2; border-left: 4px solid #ef4444; color: #991b1b; padding: 0.75rem 1rem; border-radius: 6px;">
+                <strong>Error:</strong> {{ error_general }}
+            </div>
+            {% endif %}
+
+            {% if errores_bloqueantes %}
+            <div class="alert alert-danger mb-3" style="background-color: #fee2e2; border-left: 4px solid #ef4444; color: #991b1b; padding: 0.75rem 1rem; border-radius: 6px;">
+                <strong>⛔ No se puede registrar el parto:</strong>
+                <ul style="margin: 0.5rem 0 0 1.25rem;">
+                    {% for err in errores_bloqueantes %}
+                    <li>{{ err }}</li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if alerta_roja %}
+            <div class="alert alert-danger mb-3" style="background-color: #fee2e2; border-left: 4px solid #b91c1c; color: #7f1d1d; padding: 0.75rem 1rem; border-radius: 6px;">
+                <strong>{{ mensaje_rojo }}</strong>
+            </div>
+            {% endif %}
+
+            {% if alerta_amarilla %}
+            <div class="alert alert-warning mb-3" style="background-color: #fef3c7; border-left: 4px solid #f59e0b; color: #78350f; padding: 0.75rem 1rem; border-radius: 6px;">
+                <strong>{{ mensaje_amarillo }}</strong>
+            </div>
+            {% endif %}
+
+            {% if not error_general or datos.crotal_madre %}
+            <div style="background-color: #f8fafc; padding: 1.25rem; border-radius: 8px; border: 1px solid #e2e8f0;" class="mb-3">
+                <h4 style="margin-bottom: 0.75rem; color: #0f172a; font-size: 0.95rem; font-weight: 600;">
+                    📋 Resumen de la Operación Interpretada
+                </h4>
+                
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; font-size: 0.9rem;">
+                    <div>
+                        <span style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; font-weight: 600;">Madre</span><br>
+                        <strong>#{{ crotal_madre|default:"-" }}</strong>
+                        {% if madre %}
+                        <span style="color: #475569; font-size: 0.85rem;">({{ madre.raza }} - Finca {{ madre.finca.nombre }})</span>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <span style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; font-weight: 600;">Fecha de Parto</span><br>
+                        <strong>{% if fecha_parto %}{{ fecha_parto|date:"d/m/Y" }}{% else %}{{ fecha_parto_str|default:"-" }}{% endif %}</strong>
+                    </div>
+                    <div>
+                        <span style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; font-weight: 600;">Cría</span><br>
+                        <strong>#{{ cria_crotal|default:"-" }}</strong>
+                        <span style="color: #475569; font-size: 0.85rem;">
+                            ({% if cria_sexo == 'H' %}Hembra / Ternera{% else %}Macho / Ternero{% endif %}, {{ cria_raza }})
+                        </span>
+                    </div>
+                    <div>
+                        <span style="color: #64748b; font-size: 0.8rem; text-transform: uppercase; font-weight: 600;">Recinto Asignado</span><br>
+                        <strong>{{ cria_recinto }}</strong>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="modal-footer" style="padding: 1rem 1.5rem; background-color: #f8fafc; border-top: 1px solid var(--color-border); display: flex; gap: 0.75rem;">
+            {% if puede_confirmar %}
+            <form method="post" action="{% url 'asistente_ejecutar' %}" style="display: flex; gap: 0.75rem; width: 100%; margin: 0;">
+                {% csrf_token %}
+                <input type="hidden" name="crotal_madre" value="{{ crotal_madre }}">
+                <input type="hidden" name="fecha_parto" value="{{ fecha_parto_str }}">
+                <input type="hidden" name="cria_crotal" value="{{ cria_crotal }}">
+                <input type="hidden" name="cria_sexo" value="{{ cria_sexo }}">
+                <input type="hidden" name="cria_raza" value="{{ cria_raza }}">
+                <input type="hidden" name="cria_recinto" value="{{ cria_recinto }}">
+                {% if alerta_roja %}
+                <input type="hidden" name="forzar" value="1">
+                {% endif %}
+                <button type="submit" class="btn btn-primary" style="flex: 1; justify-content: center;">
+                    {% if alerta_roja %}
+                    ⚠️ Confirmar con Alerta Roja
+                    {% else %}
+                    ✓ Confirmar y Guardar en Censo
+                    {% endif %}
+                </button>
+                <button type="button" class="btn btn-secondary" onclick="closeAiModal()">Cancelar</button>
+            </form>
+            {% else %}
+            <button type="button" class="btn btn-secondary w-100" onclick="closeAiModal()">Cerrar</button>
+            {% endif %}
+        </div>
+    </div>
+</div>

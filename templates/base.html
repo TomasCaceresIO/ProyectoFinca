@@ -14,6 +14,20 @@
         <a href="{% url 'home' %}" class="navbar-brand">
             🐄 Gestión Ganadera
         </a>
+
+        <!-- Barra Asistente de IA (Voz / Texto) -->
+        <div class="ai-assistant-bar">
+            <div class="ai-assistant-wrapper">
+                <input type="text" id="ai-input" placeholder="💬 Dicta o escribe un parto (ej. 'La 3014 parió hoy ternera 5012 limusina')..." class="ai-input">
+                <button id="btn-audio-record" type="button" class="btn-ai-mic" title="Dictar por voz">
+                    🎙️
+                </button>
+                <button id="btn-ai-submit" type="button" class="btn-ai-submit">
+                    Procesar
+                </button>
+            </div>
+        </div>
+
         <ul class="navbar-nav">
             <li><a href="{% url 'home' %}" {% if request.resolver_match.url_name == 'home' %}class="active"{% endif %}>Home / Censo</a></li>
             <li><a href="{% url 'incidencias' %}" {% if 'incidencia' in request.resolver_match.url_name %}class="active"{% endif %}>Incidencias y Bajas</a></li>
@@ -21,6 +35,9 @@
             <li><a href="{% url 'explotacion_edit' %}" {% if request.resolver_match.url_name == 'explotacion_edit' %}class="active"{% endif %}>⚙️ Ajustes Explotación</a></li>
         </ul>
     </nav>
+
+    <!-- Contenedor Modal Asistente de IA -->
+    <div id="ai-modal-container"></div>
 
     <!-- Mensajes Django -->
     {% if messages %}
@@ -39,6 +56,7 @@
     </main>
 
     <script src="{% static 'js/main.js' %}"></script>
+    <script src="{% static 'js/voice_assistant.js' %}"></script>
     <script src="https://unpkg.com/htmx.org@1.9.12"></script>
     {% block extra_js %}{% endblock %}
 </body>

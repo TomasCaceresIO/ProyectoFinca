@@ -13,6 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Inicializar django-environ
 env = environ.Env(
     DEBUG=(bool, False),
+    GEMINI_API_KEY=(str, ""),
 )
 
 # Leer .env
@@ -22,6 +23,8 @@ environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1'])
+GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
+
 
 # --- APLICACIONES ---
 INSTALLED_APPS = [

@@ -76,6 +76,90 @@ body {
   color: var(--color-white);
 }
 
+/* --- Asistente de IA Navbar --- */
+.ai-assistant-bar {
+  display: flex;
+  align-items: center;
+}
+
+.ai-assistant-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  background-color: rgba(255, 255, 255, 0.95);
+  padding: 0.25rem 0.5rem;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
+}
+
+.ai-input {
+  border: none;
+  background: transparent;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.85rem;
+  width: 330px;
+  color: #1e293b;
+  outline: none;
+  font-family: inherit;
+}
+
+.ai-input::placeholder {
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.btn-ai-mic {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 1.1rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 50%;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.btn-ai-mic:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+  transform: scale(1.1);
+}
+
+.btn-ai-mic.recording {
+  background-color: #ef4444;
+  color: white;
+  animation: pulse-recording 1.2s infinite;
+}
+
+@keyframes pulse-recording {
+  0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); }
+  50% { transform: scale(1.15); box-shadow: 0 0 0 8px rgba(239, 68, 68, 0); }
+  100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
+}
+
+.btn-ai-submit {
+  background-color: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: 14px;
+  padding: 0.3rem 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.btn-ai-submit:hover {
+  background-color: var(--color-primary-dark);
+}
+
+.btn-ai-submit:disabled, .btn-ai-mic:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* --- Layout --- */
 .main-content {
   max-width: 1200px;

@@ -35,6 +35,10 @@ urlpatterns = [
     path('exportar/csv/', views.exportar_csv, name='exportar_csv'),
     path('exportar/excel/', views.exportar_excel, name='exportar_excel'),
     
+    # Asistente IA
+    path('asistente/preview/', views.asistente_preview, name='asistente_preview'),
+    path('asistente/ejecutar/', views.asistente_ejecutar, name='asistente_ejecutar'),
+    
     # API endpoints
     path('api/validar-crotal/', views.api_validar_crotal, name='api_validar_crotal'),
 ]

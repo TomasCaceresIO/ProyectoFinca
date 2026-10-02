@@ -7,6 +7,7 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import date
 
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponse, Http404
 from django.db import transaction
@@ -22,6 +23,7 @@ from .services.animal_services import (
     validar_crotal, validar_intervalo_parto,
     registrar_parto, actualizar_parto, trasladar_animal, dar_de_baja_animal
 )
+from .services.ai_assistant import procesar_comando_parto
 
 
 def get_filtered_animales(request, with_annotations=False):
@@ -685,3 +687,223 @@ def api_validar_crotal(request):
     crotal = request.GET.get('crotal', '')
     resultado = validar_crotal(crotal)
     return JsonResponse(resultado)
+
+
+def asistente_preview(request):
+    """
+    Procesa un comando de lenguaje natural (texto o audio) para registrar un parto.
+    Valida biológica y normativamente los datos antes de tocar la base de datos,
+    devolviendo la previsualización y alertas detectadas en modal HTML.
+    """
+    if request.method != 'POST':
+        return HttpResponse("Método no permitido", status=405)
+
+    texto = request.POST.get('texto', '').strip()
+    audio = request.FILES.get('audio')
+
+    if not texto and not audio:
+        return render(request, 'ganaderia/partials/ai_preview_modal.html', {
+            'error_general': "Por favor, introduce un texto o graba un audio describiendo el parto."
+        })
+
+    texto_o_audio = audio if audio else texto
+    audio_type = audio.content_type if audio and hasattr(audio, 'content_type') else 'audio/webm'
+
+    try:
+        datos = procesar_comando_parto(texto_o_audio, audio_content_type=audio_type)
+    except Exception as e:
+        return render(request, 'ganaderia/partials/ai_preview_modal.html', {
+            'error_general': f"Error al procesar con el Asistente de IA: {str(e)}"
+        })
+
+    if datos.get('error'):
+        return render(request, 'ganaderia/partials/ai_preview_modal.html', {
+            'error_general': datos['error'],
+            'datos': datos,
+        })
+
+    crotal_madre = datos.get('crotal_madre')
+    fecha_parto_str = datos.get('fecha_parto')
+    cria_crotal = datos.get('cria_crotal')
+    cria_sexo = datos.get('cria_sexo', 'H')
+    cria_raza = datos.get('cria_raza', 'Retinta')
+    cria_recinto = datos.get('cria_recinto', 'PASTO')
+
+    errores_bloqueantes = []
+    alerta_roja = False
+    mensaje_rojo = None
+    alerta_amarilla = False
+    mensaje_amarillo = None
+    madre = None
+    fecha_parto = None
+
+    # 1. Validar madre en censo activo
+    if not crotal_madre:
+        errores_bloqueantes.append("No se ha podido identificar el crotal de la madre en el comando.")
+    else:
+        madre = Animal.objects.filter(crotal=crotal_madre, estado_vital='VIVO', sexo='H').first()
+        if not madre:
+            animal_existente = Animal.objects.filter(crotal=crotal_madre).first()
+            if animal_existente:
+                if animal_existente.sexo != 'H':
+                    errores_bloqueantes.append(f"El animal con crotal #{crotal_madre} es un Macho y no puede parir.")
+                elif animal_existente.estado_vital == 'BAJA':
+                    errores_bloqueantes.append(f"La vaca con crotal #{crotal_madre} se encuentra en estado de BAJA.")
+                else:
+                    errores_bloqueantes.append(f"La vaca con crotal #{crotal_madre} no está disponible en el censo activo.")
+            else:
+                errores_bloqueantes.append(f"No existe ninguna madre con el crotal #{crotal_madre} en la explotación.")
+
+    # 2. Validar fecha de parto
+    if not fecha_parto_str:
+        errores_bloqueantes.append("No se pudo determinar la fecha del parto.")
+    else:
+        try:
+            if '-' in fecha_parto_str:
+                parts = list(map(int, fecha_parto_str.split('-')[:3]))
+                if parts[0] > 1000:
+                    fecha_parto = date(parts[0], parts[1], parts[2])
+                else:
+                    fecha_parto = date(parts[2], parts[1], parts[0])
+            elif '/' in fecha_parto_str:
+                d, m, y = map(int, fecha_parto_str.split('/')[:3])
+                fecha_parto = date(y, m, d)
+        except Exception:
+            errores_bloqueantes.append(f"Formato de fecha de parto inválido: {fecha_parto_str}")
+
+        if fecha_parto:
+            hoy = timezone.now().date()
+            if fecha_parto > hoy:
+                errores_bloqueantes.append(f"La fecha de parto ({fecha_parto.strftime('%d/%m/%Y')}) no puede ser posterior a hoy ({hoy.strftime('%d/%m/%Y')}).")
+
+            if madre:
+                if fecha_parto < madre.fecha_nacimiento:
+                    errores_bloqueantes.append(
+                        f"La fecha del parto ({fecha_parto.strftime('%d/%m/%Y')}) no puede ser anterior al nacimiento de la madre ({madre.fecha_nacimiento.strftime('%d/%m/%Y')})."
+                    )
+                elif (fecha_parto - madre.fecha_nacimiento).days < 540:
+                    dias_vida = (fecha_parto - madre.fecha_nacimiento).days
+                    errores_bloqueantes.append(
+                        f"Incongruencia biológica: La madre tiene menos de 18 meses al parir ({dias_vida} días, mínimo legal: 540 días)."
+                    )
+
+    # 3. Validar crotal de la cría
+    if not cria_crotal:
+        errores_bloqueantes.append("No se ha podido identificar el crotal de la cría en el comando.")
+    elif len(cria_crotal) != 4 or not cria_crotal.isdigit():
+        errores_bloqueantes.append(f"El crotal de la cría ('{cria_crotal}') debe contener exactamente 4 dígitos numéricos.")
+    else:
+        val_crotal = validar_crotal(cria_crotal)
+        if val_crotal['bloqueante']:
+            errores_bloqueantes.append(val_crotal['mensaje'])
+        elif val_crotal.get('alerta') == 'AMARILLO':
+            alerta_amarilla = True
+            mensaje_amarillo = f"⚠️ Crotal #{cria_crotal} perteneció históricamente a un animal en baja."
+
+    # 4. Validar intervalo reproductivo (RN-04: Mínimo 270 días)
+    if madre and fecha_parto and not errores_bloqueantes:
+        val_intervalo = validar_intervalo_parto(madre, fecha_parto)
+        if not val_intervalo['valido']:
+            alerta_roja = True
+            dias_intervalo = val_intervalo.get('dias_intervalo', '?')
+            mensaje_rojo = (
+                f"⚠️ CONFLICTO NORMATIVO (Diputación): El intervalo con el parto anterior es de {dias_intervalo} días "
+                f"(< 9 meses / 270 días). El registro provocará una Alerta Roja oficial."
+            )
+
+    return render(request, 'ganaderia/partials/ai_preview_modal.html', {
+        'datos': datos,
+        'madre': madre,
+        'crotal_madre': crotal_madre,
+        'fecha_parto': fecha_parto,
+        'fecha_parto_str': fecha_parto.strftime('%Y-%m-%d') if fecha_parto else fecha_parto_str,
+        'cria_crotal': cria_crotal,
+        'cria_sexo': cria_sexo,
+        'cria_raza': cria_raza,
+        'cria_recinto': cria_recinto,
+        'errores_bloqueantes': errores_bloqueantes,
+        'alerta_roja': alerta_roja,
+        'mensaje_rojo': mensaje_rojo,
+        'alerta_amarilla': alerta_amarilla,
+        'mensaje_amarillo': mensaje_amarillo,
+        'puede_confirmar': len(errores_bloqueantes) == 0,
+    })
+
+
+def asistente_ejecutar(request):
+    """
+    Ejecuta atómicamente el registro del parto y la cría confirmados desde el asistente de IA.
+    """
+    if request.method != 'POST':
+        return HttpResponse("Método no permitido", status=405)
+
+    crotal_madre = request.POST.get('crotal_madre')
+    fecha_parto_str = request.POST.get('fecha_parto')
+    cria_crotal = request.POST.get('cria_crotal')
+    cria_sexo = request.POST.get('cria_sexo', 'H')
+    cria_raza = request.POST.get('cria_raza', 'Retinta')
+    cria_recinto = request.POST.get('cria_recinto', 'PASTO')
+    forzar = request.POST.get('forzar') in ['1', 'true', 'True', True]
+
+    madre = Animal.objects.filter(crotal=crotal_madre, estado_vital='VIVO', sexo='H').first()
+    if not madre:
+        messages.error(request, f"La madre #{crotal_madre} no se encuentra en el censo activo.")
+        return redirect('home')
+
+    try:
+        if '-' in fecha_parto_str:
+            y, m, d = map(int, fecha_parto_str.split('-')[:3])
+            fecha_parto = date(y, m, d)
+        else:
+            d, m, y = map(int, fecha_parto_str.split('/')[:3])
+            fecha_parto = date(y, m, d)
+    except Exception:
+        messages.error(request, f"Fecha de parto no válida: {fecha_parto_str}")
+        return redirect('home')
+
+    crias = [{
+        'crotal': cria_crotal,
+        'sexo': cria_sexo,
+        'raza': cria_raza,
+    }]
+
+    try:
+        with transaction.atomic():
+            resultado = registrar_parto(
+                madre=madre,
+                fecha_parto=fecha_parto,
+                forzar=forzar,
+                observaciones="Registrado mediante Asistente de IA (Voz/Texto)",
+                crias=crias,
+            )
+            cria = resultado['cria']
+            if cria_recinto and cria.sub_ubicacion != cria_recinto:
+                cria.sub_ubicacion = cria_recinto
+                cria.save()
+
+            if resultado['alerta'] == 'ROJO':
+                messages.warning(
+                    request,
+                    f"⚠️ Parto de la vaca {madre.crotal} registrado con Alerta Roja de intervalo (< 270 días). "
+                    f"Cría {cria.crotal} añadida al censo."
+                )
+            else:
+                messages.success(
+                    request,
+                    f"✅ Parto de la vaca {madre.crotal} y cría {cria.crotal} ({cria.get_sexo_display()}, {cria.raza}) registrados con éxito."
+                )
+
+        if request.headers.get('HX-Request'):
+            response = HttpResponse(status=200)
+            response['HX-Redirect'] = reverse('animal_detail', kwargs={'crotal': cria.crotal})
+            return response
+        return redirect('animal_detail', crotal=cria.crotal)
+
+    except Exception as e:
+        messages.error(request, f"Error al ejecutar el registro de parto: {str(e)}")
+        if request.headers.get('HX-Request'):
+            response = HttpResponse(status=200)
+            response['HX-Redirect'] = reverse('home')
+            return response
+        return redirect('home')
+
