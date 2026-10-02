@@ -188,12 +188,70 @@ def animal_detail(request, crotal):
 
     partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
     incidencias = animal.incidencias.all()
+    edit_form = AnimalForm(instance=animal)
     
     return render(request, 'ganaderia/animal_detail.html', {
         'animal': animal,
         'partos': partos,
         'incidencias': incidencias,
+        'edit_form': edit_form,
     })
+
+
+def animal_edit(request, crotal):
+    """
+    Editar atributos básicos de un animal desde su ficha.
+    Aplica restricciones biológicas y de linaje.
+    """
+    animal = Animal.objects.filter(crotal=crotal, estado_vital='VIVO').first()
+    if not animal:
+        animal = Animal.objects.filter(crotal=crotal).order_by('-id').first()
+    if not animal:
+        raise Http404('Animal no encontrado')
+
+    form = AnimalForm(request.POST or None, instance=animal)
+    alerta_amarilla = None
+
+    if request.method == 'POST':
+        if form.is_valid():
+            alerta_amarilla = getattr(form, '_crotal_alerta', None)
+            if alerta_amarilla == 'AMARILLO' and not request.POST.get('confirmar_crotal_historico'):
+                partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
+                return render(request, 'ganaderia/animal_detail.html', {
+                    'animal': animal,
+                    'partos': partos,
+                    'incidencias': animal.incidencias.all(),
+                    'edit_form': form,
+                    'alerta_amarilla_edit': True,
+                    'mensaje_alerta_edit': getattr(form, '_crotal_mensaje', ''),
+                    'open_edit_modal': True,
+                })
+
+            animal_actualizado = form.save()
+
+            if alerta_amarilla == 'AMARILLO':
+                Incidencia.objects.create(
+                    animal=animal_actualizado,
+                    tipo='AMARILLO',
+                    descripcion=f'Se reutilizó el crotal {animal_actualizado.crotal} previamente asignado a un animal en baja.'
+                )
+                messages.warning(request, f'⚠️ Animal {animal_actualizado.crotal} actualizado con aviso de crotal histórico.')
+            else:
+                messages.success(request, f'✅ Datos del animal {animal_actualizado.crotal} actualizados correctamente.')
+
+            return redirect('animal_detail', crotal=animal_actualizado.crotal)
+
+        else:
+            partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
+            return render(request, 'ganaderia/animal_detail.html', {
+                'animal': animal,
+                'partos': partos,
+                'incidencias': animal.incidencias.all(),
+                'edit_form': form,
+                'open_edit_modal': True,
+            })
+
+    return redirect('animal_detail', crotal=animal.crotal)
 
 
 def animal_create(request):

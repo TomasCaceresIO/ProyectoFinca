@@ -88,7 +88,7 @@ class FincaForm(forms.Form):
 
 
 class AnimalForm(forms.ModelForm):
-    """Formulario para crear/editar un animal."""
+    """Formulario para crear/editar un animal con restricciones biológicas estrictas."""
     class Meta:
         model = Animal
         fields = [
@@ -128,7 +128,13 @@ class AnimalForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields['madre'].queryset = Animal.objects.filter(sexo='H')
+        qs_madres = Animal.objects.filter(sexo='H')
+        if self.instance and self.instance.pk:
+            qs_madres = qs_madres.exclude(pk=self.instance.pk)
+            hijas_ids = list(self.instance.hijos.values_list('pk', flat=True))
+            if hijas_ids:
+                qs_madres = qs_madres.exclude(pk__in=hijas_ids)
+        self.fields['madre'].queryset = qs_madres
         self.fields['fecha_nacimiento'].widget.attrs['max'] = timezone.now().date().strftime('%Y-%m-%d')
 
     def clean_crotal(self):
@@ -148,6 +154,73 @@ class AnimalForm(forms.ModelForm):
         if fecha and fecha > timezone.now().date():
             raise ValidationError(f'La fecha ({fecha.strftime("%d/%m/%Y")}) no puede ser posterior al día de hoy.')
         return fecha
+
+    def clean(self):
+        cleaned_data = super().clean()
+        sexo = cleaned_data.get('sexo')
+        fecha_nacimiento = cleaned_data.get('fecha_nacimiento')
+        madre = cleaned_data.get('madre')
+
+        # 1. RESTRICCIÓN CRÍTICA DE SEXO (Hembra -> Macho)
+        if self.instance and self.instance.pk and self.instance.sexo == 'H' and sexo == 'M':
+            tiene_partos = self.instance.partos_como_madre.exists()
+            tiene_hijos = Animal.objects.filter(madre=self.instance).exists()
+            if tiene_partos or tiene_hijos:
+                self.add_error(
+                    'sexo',
+                    'Operación denegada: Este animal tiene registros de partos y descendencia asociada. No es posible cambiar su sexo a Macho.'
+                )
+
+        # 3. RESTRICCIONES TEMPORALES EN FECHA DE NACIMIENTO
+        if fecha_nacimiento:
+            if self.instance and self.instance.pk and self.instance.partos_como_madre.exists():
+                primer_parto = self.instance.partos_como_madre.order_by('fecha_parto').first()
+                if primer_parto and (primer_parto.fecha_parto - fecha_nacimiento).days < 540:
+                    self.add_error(
+                        'fecha_nacimiento',
+                        f'La nueva fecha de nacimiento no deja un margen de al menos 18 meses (540 días) respecto al primer parto del animal ({primer_parto.fecha_parto.strftime("%d/%m/%Y")}).'
+                    )
+
+            if madre and madre.fecha_nacimiento:
+                if (fecha_nacimiento - madre.fecha_nacimiento).days < 540:
+                    self.add_error(
+                        'fecha_nacimiento',
+                        f'La fecha de nacimiento del animal debe ser al menos 18 meses (540 días) posterior al nacimiento de la madre ({madre.fecha_nacimiento.strftime("%d/%m/%Y")}).'
+                    )
+
+        # 4. RESTRICCIONES EN LA RELACIÓN MATERNA (madre)
+        if madre:
+            if self.instance and self.instance.pk:
+                if madre.pk == self.instance.pk:
+                    self.add_error('madre', 'Un animal no puede ser su propia madre.')
+                
+                hijas_ids = set(self.instance.hijos.values_list('pk', flat=True))
+                if madre.pk in hijas_ids:
+                    self.add_error('madre', 'Operación denegada: No se puede asignar como madre a una hija del propio animal (referencia circular).')
+
+            if madre.sexo != 'H':
+                self.add_error('madre', 'El animal seleccionado como madre debe tener obligatoriamente sexo Hembra.')
+
+        return cleaned_data
+
+    def save(self, commit=True):
+        animal = super().save(commit=False)
+        if self.instance and self.instance.pk:
+            prev_animal = Animal.objects.filter(pk=self.instance.pk).first()
+            if prev_animal and prev_animal.sub_ubicacion != animal.sub_ubicacion:
+                if animal.sub_ubicacion == 'CEBADERO':
+                    animal.fecha_entrada_cebadero = timezone.now().date()
+                else:
+                    animal.fecha_entrada_cebadero = None
+        else:
+            if animal.sub_ubicacion == 'CEBADERO':
+                animal.fecha_entrada_cebadero = timezone.now().date()
+            else:
+                animal.fecha_entrada_cebadero = None
+
+        if commit:
+            animal.save()
+        return animal
 
 
 class AnimalBajaForm(forms.Form):

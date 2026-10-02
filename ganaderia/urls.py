@@ -15,6 +15,7 @@ urlpatterns = [
     path('animales/', views.animal_list, name='animal_list'),
     path('animales/nuevo/', views.animal_create, name='animal_create'),
     path('animales/<str:crotal>/', views.animal_detail, name='animal_detail'),
+    path('animales/<str:crotal>/editar/', views.animal_edit, name='animal_edit'),
     path('animales/<str:crotal>/baja/', views.animal_baja, name='animal_baja'),
     path('animales/<str:crotal>/traslado/', views.animal_traslado, name='animal_traslado'),
     

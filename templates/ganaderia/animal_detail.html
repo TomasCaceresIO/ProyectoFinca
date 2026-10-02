@@ -21,6 +21,7 @@
             {% if animal.sexo == 'H' %}
             <a href="{% url 'parto_create' %}?madre={{ animal.crotal }}" class="btn btn-primary">🐣 Registrar Parto</a>
             {% endif %}
+            <button type="button" class="btn btn-outline" onclick="openEditModal()">✏️ Editar Datos del Animal</button>
             <a href="{% url 'animal_traslado' crotal=animal.crotal %}" class="btn btn-outline">🔄 Trasladar Recinto</a>
             <a href="{% url 'animal_baja' crotal=animal.crotal %}" class="btn btn-danger">❌ Dar de Baja</a>
         {% endif %}
@@ -190,5 +191,99 @@
     </div>
 </div>
 {% endif %}
+
+<!-- Modal Editar Animal -->
+<div id="modal-editar-animal" class="modal-overlay" style="display: {% if open_edit_modal or edit_form.errors or alerta_amarilla_edit %}flex{% else %}none{% endif %};">
+    <div class="modal" style="max-width: 650px;">
+        <div class="modal-header d-flex justify-between align-center">
+            <h3 style="margin: 0;">✏️ Editar Datos del Animal {{ animal.crotal }}</h3>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeEditModal()">✕</button>
+        </div>
+        <div class="modal-body">
+            {% if edit_form.errors %}
+            <div class="alert alert-danger mb-3">
+                Por favor, corrige los errores indicados a continuación.
+            </div>
+            {% endif %}
+
+            {% if alerta_amarilla_edit %}
+            <div class="alert alert-warning mb-3">
+                <strong>⚠️ Alerta Amarilla (Crotal Histórico Reutilizado)</strong><br>
+                {{ mensaje_alerta_edit }}
+            </div>
+            {% endif %}
+
+            <form method="post" action="{% url 'animal_edit' crotal=animal.crotal %}">
+                {% csrf_token %}
+                {% if alerta_amarilla_edit %}
+                <input type="hidden" name="confirmar_crotal_historico" value="1">
+                {% endif %}
+
+                <div class="form-group mb-2">
+                    <label class="form-label">Crotal (4 dígitos) *</label>
+                    {{ edit_form.crotal }}
+                    {% if edit_form.crotal.errors %}<div class="text-danger"><small>{{ edit_form.crotal.errors.0 }}</small></div>{% endif %}
+                </div>
+
+                <div class="grid-2 gap-2 mb-2">
+                    <div>
+                        <label class="form-label">Sexo *</label>
+                        {{ edit_form.sexo }}
+                        {% if edit_form.sexo.errors %}<div class="text-danger"><small>{{ edit_form.sexo.errors.0 }}</small></div>{% endif %}
+                        {% if animal.sexo == 'H' and animal.partos_como_madre.exists or animal.hijos.exists %}
+                        <div class="form-text text-danger"><small>⚠️ Bloqueado: Tiene descendencia registrada.</small></div>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <label class="form-label">Raza *</label>
+                        {{ edit_form.raza }}
+                        {% if edit_form.raza.errors %}<div class="text-danger"><small>{{ edit_form.raza.errors.0 }}</small></div>{% endif %}
+                    </div>
+                </div>
+
+                <div class="form-group mb-2">
+                    <label class="form-label">Fecha de Nacimiento *</label>
+                    {{ edit_form.fecha_nacimiento }}
+                    {% if edit_form.fecha_nacimiento.errors %}<div class="text-danger"><small>{{ edit_form.fecha_nacimiento.errors.0 }}</small></div>{% endif %}
+                </div>
+
+                <div class="grid-2 gap-2 mb-2">
+                    <div>
+                        <label class="form-label">Finca *</label>
+                        {{ edit_form.finca }}
+                        {% if edit_form.finca.errors %}<div class="text-danger"><small>{{ edit_form.finca.errors.0 }}</small></div>{% endif %}
+                    </div>
+                    <div>
+                        <label class="form-label">Recinto (Sub-ubicación) *</label>
+                        {{ edit_form.sub_ubicacion }}
+                        {% if edit_form.sub_ubicacion.errors %}<div class="text-danger"><small>{{ edit_form.sub_ubicacion.errors.0 }}</small></div>{% endif %}
+                    </div>
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label">Madre (opcional / Fundadora)</label>
+                    {{ edit_form.madre }}
+                    {% if edit_form.madre.errors %}<div class="text-danger"><small>{{ edit_form.madre.errors.0 }}</small></div>{% endif %}
+                </div>
+
+                <div class="modal-footer px-0 pb-0">
+                    <button type="submit" class="btn btn-primary w-100">
+                        {% if alerta_amarilla_edit %}✅ Confirmar y Guardar{% else %}💾 Guardar Cambios{% endif %}
+                    </button>
+                    <button type="button" class="btn btn-secondary w-100" onclick="closeEditModal()">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function openEditModal() {
+    document.getElementById('modal-editar-animal').style.display = 'flex';
+}
+function closeEditModal() {
+    document.getElementById('modal-editar-animal').style.display = 'none';
+}
+</script>
 
 {% endblock %}
