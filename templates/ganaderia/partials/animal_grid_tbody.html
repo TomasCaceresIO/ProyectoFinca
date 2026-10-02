@@ -1,0 +1,61 @@
+{% for animal in animales %}
+<tr>
+    <td>
+        <a href="{% url 'animal_detail' crotal=animal.crotal %}" class="font-weight-bold" style="text-decoration: underline;">
+            <strong>{{ animal.crotal }}</strong>
+        </a>
+    </td>
+    <td>
+        {% if animal.sexo == 'H' %}
+        <span class="badge badge-info">♀ Hembra</span>
+        {% else %}
+        <span class="badge badge-secondary">♂ Macho</span>
+        {% endif %}
+    </td>
+    <td>{{ animal.raza }}</td>
+    <td>{{ animal.edad_dias }} días</td>
+    <td>{{ animal.finca.nombre }}</td>
+    <td>
+        {% if animal.sub_ubicacion == 'CEBADERO' %}
+        <span class="badge badge-warning">🌾 Cebadero</span>
+        {% elif animal.sub_ubicacion == 'APARTADO' %}
+        <span class="badge badge-secondary">🧱 Apartado</span>
+        {% else %}
+        <span class="badge badge-success">🌱 Pasto</span>
+        {% endif %}
+    </td>
+    <td>
+        {% if animal.fecha_entrada_cebadero %}
+        <small>{{ animal.fecha_entrada_cebadero|date:"Y-m-d" }}</small>
+        {% else %}
+        -
+        {% endif %}
+    </td>
+    <td>
+        {% if animal.sexo == 'H' %}
+            {% if animal.ultimo_parto %}
+                {{ animal.ultimo_parto.fecha_parto|date:"Y-m-d" }}
+                <br>
+                <small class="text-muted">({{ animal.dias_desde_ultimo_parto }} d)</small>
+            {% else %}
+                <small class="text-muted">Sin partos</small>
+            {% endif %}
+        {% else %}
+            <small class="text-muted">N/A</small>
+        {% endif %}
+    </td>
+    <td>
+        <div class="d-flex gap-1">
+            <a href="{% url 'animal_detail' crotal=animal.crotal %}" class="btn btn-sm btn-outline">👁️ Ver</a>
+            <a href="{% url 'animal_traslado' crotal=animal.crotal %}" class="btn btn-sm btn-outline">🔄 Trasladar</a>
+            <a href="{% url 'animal_baja' crotal=animal.crotal %}" class="btn btn-sm btn-danger">❌ Baja</a>
+        </div>
+    </td>
+</tr>
+{% empty %}
+<tr>
+    <td colspan="9" class="text-center text-muted py-3">
+        No se encontraron animales con los filtros seleccionados.
+    </td>
+</tr>
+{% endfor %}

@@ -3,11 +3,11 @@
 {% block title %}Configuración Inicial - Gestión Ganadera{% endblock %}
 
 {% block content %}
-<div style="max-width: 600px; margin: 3rem auto;">
+<div style="max-width: 650px; margin: 2rem auto;">
     <div class="card">
         <div class="card-header">
             <h2>🐄 Bienvenido a Gestión Ganadera</h2>
-            <p class="text-muted" style="font-weight: normal; margin-top: 0.5rem;">Configura tu explotación ganadera para comenzar</p>
+            <p class="text-muted" style="font-weight: normal; margin-top: 0.5rem;">Configura tu explotación ganadera y finca inicial para comenzar</p>
         </div>
         <div class="card-body">
             {% if form.errors %}
@@ -17,25 +17,50 @@
             <form method="post">
                 {% csrf_token %}
                 
-                <div class="form-group">
+                <h4 class="mb-2">1. Datos de la Explotación</h4>
+                <div class="form-group mb-2">
                     <label class="form-label" for="id_nombre">Nombre de la Explotación *</label>
                     <input type="text" class="form-control" id="id_nombre" name="nombre" 
                            placeholder="Ej: Ganadería Las Encinas" required
                            value="{{ form.nombre.value|default:'' }}">
-                    {% if form.nombre.errors %}
-                    <div class="text-danger">{{ form.nombre.errors.0 }}</div>
-                    {% endif %}
                 </div>
 
-                <div class="form-group">
+                <div class="form-group mb-3">
                     <label class="form-label" for="id_codigo_rega">Código REGA *</label>
                     <input type="text" class="form-control" id="id_codigo_rega" name="codigo_rega" 
                            placeholder="Ej: ES-190420001234" required
                            value="{{ form.codigo_rega.value|default:'' }}">
-                    <div class="form-text">Formato: ES-CCPPMMYYNNNNN (código oficial de registro de explotación)</div>
-                    {% if form.codigo_rega.errors %}
-                    <div class="text-danger">{{ form.codigo_rega.errors.0 }}</div>
-                    {% endif %}
+                    <div class="form-text">Código oficial de registro de la explotación</div>
+                </div>
+
+                <h4 class="mb-2">2. Finca Inicial y Recintos</h4>
+                <div class="form-group mb-2">
+                    <label class="form-label" for="id_nombre_finca">Nombre de la Finca Inicial *</label>
+                    <input type="text" class="form-control" id="id_nombre_finca" name="nombre_finca" 
+                           placeholder="Ej: Finca Principal" required
+                           value="{{ form.nombre_finca.value|default:'Finca Principal' }}">
+                </div>
+
+                <div class="form-group mb-3">
+                    <label class="form-label">Recintos / Sub-ubicaciones</label>
+                    <div class="form-check" style="margin-bottom: 0.5rem;">
+                        <input class="form-check-input" type="checkbox" checked disabled id="pasto_mandatory">
+                        <label class="form-check-label" for="pasto_mandatory">
+                            🌱 <strong>Pasto</strong> (Obligatorio, recinto por defecto)
+                        </label>
+                    </div>
+                    <div class="form-check" style="margin-bottom: 0.5rem;">
+                        <input class="form-check-input" type="checkbox" name="cebadero" id="id_cebadero" checked>
+                        <label class="form-check-label" for="id_cebadero">
+                            🌾 <strong>Cebadero</strong> (Recinto para cebado/engorde)
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="apartado" id="id_apartado" checked>
+                        <label class="form-check-label" for="id_apartado">
+                            🧱 <strong>Apartado</strong> (Recinto para animales separados)
+                        </label>
+                    </div>
                 </div>
 
                 <div class="mt-3">

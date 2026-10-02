@@ -17,20 +17,20 @@ class FincaAdmin(admin.ModelAdmin):
 
 @admin.register(Ubicacion)
 class UbicacionAdmin(admin.ModelAdmin):
-    list_display = ['__str__', 'finca', 'tipo', 'n_animales']
-    list_filter = ['tipo', 'finca']
+    list_display = ['__str__', 'finca', 'tipo_ubicacion']
+    list_filter = ['tipo_ubicacion', 'finca']
 
 
 @admin.register(Animal)
 class AnimalAdmin(admin.ModelAdmin):
-    list_display = ['crotal', 'sexo', 'raza', 'estado_vital', 'finca_actual', 'sub_ubicacion', 'fecha_nacimiento']
-    list_filter = ['sexo', 'estado_vital', 'raza', 'finca_actual']
+    list_display = ['crotal', 'sexo', 'raza', 'estado_vital', 'finca', 'sub_ubicacion', 'fecha_nacimiento']
+    list_filter = ['sexo', 'estado_vital', 'raza', 'finca', 'sub_ubicacion']
     search_fields = ['crotal']
     readonly_fields = ['created_at', 'updated_at']
     fieldsets = [
         ('Identificación', {'fields': ['crotal', 'sexo', 'raza', 'fecha_nacimiento', 'madre']}),
         ('Estado', {'fields': ['estado_vital', 'fecha_baja', 'motivo_baja']}),
-        ('Ubicación', {'fields': ['finca_actual', 'sub_ubicacion', 'fecha_entrada_cebadero']}),
+        ('Ubicación', {'fields': ['finca', 'sub_ubicacion', 'fecha_entrada_cebadero']}),
         ('Auditoría', {'fields': ['created_at', 'updated_at']}),
     ]
 
