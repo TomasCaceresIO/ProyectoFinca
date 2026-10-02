@@ -1,23 +1,14 @@
 """
 Modelos de datos para el sistema de Gestión Ganadera MVP.
-
-Modelo relacional:
-- Explotacion (1) -- (N) Finca
-- Finca (1) -- (N) Ubicacion  
-- Ubicacion (1) -- (N) Animal
-- Animal autorreferenciado (madre -> cría)
-- Animal (1) -- (N) Parto (como madre)
 """
 from django.db import models
-from django.core.validators import RegexValidator, MinValueValidator, MaxValueValidator
-from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.utils import timezone
 
 
 class Explotacion(models.Model):
     """
-    Explotación ganadera registrada oficialmente.
-    Solo puede existir una por instalación (Onboarding Wizard).
+    Explotación ganadera registrada oficialmente (Código REGA).
     """
     codigo_rega = models.CharField(
         max_length=20,
@@ -42,12 +33,11 @@ class Explotacion(models.Model):
 
 class Finca(models.Model):
     """
-    Finca o parcela perteneciente a una explotación.
-    Una explotación puede tener varias fincas.
+    Finca perteneciente a una explotación.
     """
     explotacion = models.ForeignKey(
         Explotacion,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='fincas',
         verbose_name='Explotación'
     )
@@ -68,8 +58,7 @@ class Finca(models.Model):
 
 class Ubicacion(models.Model):
     """
-    Recinto o sub-ubicación dentro de una finca.
-    Tipos: PASTO (campo abierto), CEBADERO (engorde), APARTADO (separados).
+    Recinto o sub-ubicación dentro de una finca (PASTO, CEBADERO, APARTADO).
     """
     TIPO_CHOICES = [
         ('PASTO', 'Pasto'),
@@ -79,41 +68,34 @@ class Ubicacion(models.Model):
 
     finca = models.ForeignKey(
         Finca,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='ubicaciones',
         verbose_name='Finca'
     )
-    tipo = models.CharField(
+    tipo_ubicacion = models.CharField(
         max_length=10,
         choices=TIPO_CHOICES,
         verbose_name='Tipo de ubicación'
     )
-    # Campo calculado / de caché para mostrar en UI sin contar siempre
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         verbose_name = 'Ubicación'
         verbose_name_plural = 'Ubicaciones'
-        ordering = ['finca', 'tipo']
+        ordering = ['finca', 'tipo_ubicacion']
 
     def __str__(self):
-        return f'{self.get_tipo_display()} - {self.finca.nombre}'
-
-    @property
-    def n_animales(self):
-        """Número de animales vivos en esta ubicación."""
-        return self.animales.filter(estado_vital='VIVO').count()
+        return f'{self.get_tipo_ubicacion_display()} - {self.finca.nombre}'
 
 
 class Animal(models.Model):
     """
     Animal registrado en la explotación.
     
-    Reglas de negocio clave:
-    - crotal: exactamente 4 dígitos numéricos (RN-01)
-    - Solo puede haber UN animal VIVO con el mismo crotal (unicidad activa, RN-02)
-    - Los animales dados de baja conservan el crotal pero estado_vital='BAJA' (RN-03)
-    - fecha_entrada_cebadero se asigna automáticamente al trasladar a CEBADERO
+    Reglas clave:
+    - crotal: CharField 4 dígitos numéricos estrictos ('0042')
+    - Unicidad activa: Solo 1 animal VIVO por crotal
+    - madre autorreferenciada (related_name='hijos')
     """
     SEXO_CHOICES = [
         ('M', 'Macho'),
@@ -123,22 +105,15 @@ class Animal(models.Model):
         ('VIVO', 'Vivo'),
         ('BAJA', 'Baja'),
     ]
-    RAZA_CHOICES = [
-        ('RETINTA', 'Retinta'),
-        ('CHAROLESA', 'Charolesa'),
-        ('LIMUSINA', 'Limusina'),
-        ('FRISONA', 'Frisona'),
-        ('SIMMENTAL', 'Simmental'),
-        ('ANGUS', 'Angus'),
-        ('HEREFORD', 'Hereford'),
-        ('CRUZADO', 'Cruzado'),
-        ('OTRA', 'Otra'),
+    SUB_UBICACION_CHOICES = [
+        ('PASTO', 'Pasto'),
+        ('CEBADERO', 'Cebadero'),
+        ('APARTADO', 'Apartado'),
     ]
 
-    # Identificación
     crotal = models.CharField(
         max_length=4,
-        verbose_name='Crotal (número de identificación)',
+        verbose_name='Crotal',
         validators=[
             RegexValidator(
                 regex=r'^\d{4}$',
@@ -146,8 +121,6 @@ class Animal(models.Model):
             )
         ]
     )
-    
-    # Datos básicos
     sexo = models.CharField(
         max_length=1,
         choices=SEXO_CHOICES,
@@ -157,13 +130,10 @@ class Animal(models.Model):
         verbose_name='Fecha de nacimiento'
     )
     raza = models.CharField(
-        max_length=20,
-        choices=RAZA_CHOICES,
+        max_length=50,
         default='CRUZADO',
         verbose_name='Raza'
     )
-    
-    # Estado
     estado_vital = models.CharField(
         max_length=5,
         choices=ESTADO_VITAL_CHOICES,
@@ -180,40 +150,31 @@ class Animal(models.Model):
         blank=True,
         verbose_name='Motivo de baja'
     )
-    
-    # Ubicación actual
-    finca_actual = models.ForeignKey(
+    finca = models.ForeignKey(
         Finca,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='animales',
-        verbose_name='Finca actual'
+        verbose_name='Finca'
     )
-    sub_ubicacion = models.ForeignKey(
-        Ubicacion,
-        on_delete=models.PROTECT,
-        related_name='animales',
+    sub_ubicacion = models.CharField(
+        max_length=10,
+        choices=SUB_UBICACION_CHOICES,
+        default='PASTO',
         verbose_name='Sub-ubicación (recinto)'
     )
-    
-    # Cebadero
     fecha_entrada_cebadero = models.DateField(
         null=True,
         blank=True,
         verbose_name='Fecha de entrada al cebadero'
     )
-    
-    # Maternidad (autorreferencia)
     madre = models.ForeignKey(
         'self',
         null=True,
         blank=True,
         on_delete=models.SET_NULL,
-        related_name='crias',
-        verbose_name='Madre',
-        limit_choices_to={'sexo': 'H', 'estado_vital': 'VIVO'}
+        related_name='hijos',
+        verbose_name='Madre'
     )
-    
-    # Timestamps
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -221,7 +182,6 @@ class Animal(models.Model):
         verbose_name = 'Animal'
         verbose_name_plural = 'Animales'
         ordering = ['crotal']
-        # Restricción: solo 1 animal VIVO por crotal
         constraints = [
             models.UniqueConstraint(
                 fields=['crotal'],
@@ -232,19 +192,6 @@ class Animal(models.Model):
 
     def __str__(self):
         return f'Crotal {self.crotal} ({self.get_sexo_display()}) - {self.get_estado_vital_display()}'
-
-    def clean(self):
-        """Validaciones a nivel de modelo."""
-        super().clean()
-        # Validar que la sub_ubicacion pertenece a la finca_actual
-        if self.finca_actual_id and self.sub_ubicacion_id:
-            if self.sub_ubicacion.finca_id != self.finca_actual_id:
-                raise ValidationError(
-                    'La sub-ubicación no pertenece a la finca seleccionada.'
-                )
-        # No puede ser su propia madre
-        if self.madre_id and self.pk and self.madre_id == self.pk:
-            raise ValidationError('Un animal no puede ser su propia madre.')
 
     @property
     def edad_dias(self):
@@ -261,25 +208,29 @@ class Animal(models.Model):
         """Último parto registrado de esta hembra."""
         return self.partos_como_madre.order_by('-fecha_parto').first()
 
+    @property
+    def dias_desde_ultimo_parto(self):
+        """Días transcurridos desde el último parto."""
+        up = self.ultimo_parto
+        if up and up.fecha_parto:
+            return (timezone.now().date() - up.fecha_parto).days
+        return None
+
 
 class Parto(models.Model):
     """
     Registro de parto de una hembra.
-    
-    - alerta_intervalo: True si el intervalo con el parto anterior fue < 270 días (RN-04)
-    - La cría puede no registrarse inmediatamente (nullable)
     """
     madre = models.ForeignKey(
         Animal,
-        on_delete=models.PROTECT,
+        on_delete=models.CASCADE,
         related_name='partos_como_madre',
-        verbose_name='Madre',
-        limit_choices_to={'sexo': 'H'}
+        verbose_name='Madre'
     )
     fecha_parto = models.DateField(
         verbose_name='Fecha del parto'
     )
-    cria = models.OneToOneField(
+    cria = models.ForeignKey(
         Animal,
         null=True,
         blank=True,
@@ -289,8 +240,7 @@ class Parto(models.Model):
     )
     alerta_intervalo = models.BooleanField(
         default=False,
-        verbose_name='Alerta de intervalo',
-        help_text='True si el intervalo entre partos fue menor a 270 días'
+        verbose_name='Alerta de intervalo (< 270 días)'
     )
     observaciones = models.TextField(
         blank=True,
@@ -304,13 +254,12 @@ class Parto(models.Model):
         ordering = ['-fecha_parto']
 
     def __str__(self):
-        return f'Parto de {self.madre} el {self.fecha_parto}'
+        return f'Parto de {self.madre.crotal} el {self.fecha_parto}'
 
 
 class Incidencia(models.Model):
     """
-    Registro de incidencias/alertas generadas por las reglas de negocio.
-    Se generan automáticamente, el usuario puede marcarlas como resueltas.
+    Registro de incidencias/alertas.
     """
     TIPO_CHOICES = [
         ('ROJO', 'Alerta Roja - Intervalo Parto < 270 días'),
@@ -352,4 +301,4 @@ class Incidencia(models.Model):
         ordering = ['-created_at']
 
     def __str__(self):
-        return f'[{self.get_tipo_display()}] Animal {self.animal.crotal} - {self.created_at.date()}'
+        return f'[{self.get_tipo_display()}] Animal {self.animal.crotal}'
