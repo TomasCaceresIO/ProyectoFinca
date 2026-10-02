@@ -87,3 +87,35 @@ class CrotalAndConstraintsTestCase(TestCase):
         self.assertFalse(res['bloqueante'])
         self.assertEqual(res['alerta'], 'AMARILLO')
         self.assertIsNotNone(res['animal_baja'])
+
+    def test_duplicate_crotal_detail_view_prioritizes_vivo(self):
+        """
+        Verificar que al haber un animal en BAJA y otro en VIVO con el mismo crotal,
+        la vista de detalle /animales/<crotal>/ devuelve el VIVO sin MultipleObjectsReturned.
+        """
+        from django.urls import reverse
+
+        # Animal histórico en BAJA
+        a_baja = Animal.objects.create(
+            crotal="6668",
+            sexo="H",
+            fecha_nacimiento=date(2018, 1, 1),
+            estado_vital="BAJA",
+            finca=self.finca,
+            sub_ubicacion="PASTO"
+        )
+        # Reutilización legítima de crotal: nuevo animal VIVO
+        a_vivo = Animal.objects.create(
+            crotal="6668",
+            sexo="M",
+            fecha_nacimiento=date(2023, 5, 10),
+            estado_vital="VIVO",
+            finca=self.finca,
+            sub_ubicacion="PASTO"
+        )
+
+        url = reverse('animal_detail', kwargs={'crotal': '6668'})
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['animal'].pk, a_vivo.pk)
+

@@ -66,6 +66,32 @@ class FincaDeletionAndExportTestCase(TestCase):
         self.assertEqual(self.animal1.estado_vital, 'BAJA')
         self.assertEqual(self.animal2.estado_vital, 'BAJA')
 
+    def test_finca_delete_opcion_c_granular(self):
+        """Test de eliminación de finca con resolución granular por animal (Opción C)."""
+        url = reverse('finca_delete', kwargs={'pk': self.finca1.pk})
+        data = {
+            'opcion': 'opcion_c',
+            'finca_destino_c': self.finca2.pk,
+            f'accion_{self.animal1.pk}': 'trasladar',
+            f'accion_{self.animal2.pk}': 'baja',
+        }
+        res = self.client.post(url, data)
+        self.assertEqual(res.status_code, 302)
+        self.assertRedirects(res, reverse('finca_list'))
+
+        # Finca 1 eliminada
+        self.assertFalse(Finca.objects.filter(pk=self.finca1.pk).exists())
+
+        # Animal 1 trasladado a Finca 2
+        self.animal1.refresh_from_db()
+        self.assertEqual(self.animal1.estado_vital, 'VIVO')
+        self.assertEqual(self.animal1.finca, self.finca2)
+
+        # Animal 2 registrado como BAJA
+        self.animal2.refresh_from_db()
+        self.assertEqual(self.animal2.estado_vital, 'BAJA')
+
+
     def test_exportar_csv_headers_and_filters(self):
         """Test del endpoint de exportación CSV verificando que las cabeceras y los filtros coinciden."""
         url = reverse('exportar_csv') + "?sexo=H"

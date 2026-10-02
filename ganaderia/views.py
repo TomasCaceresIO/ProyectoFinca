@@ -8,7 +8,7 @@ from datetime import date
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.http import JsonResponse, HttpResponse
+from django.http import JsonResponse, HttpResponse, Http404
 from django.db import transaction
 from django.utils import timezone
 
@@ -153,11 +153,27 @@ def animal_list(request):
 
 
 def animal_detail(request, crotal):
-    """Ficha detallada de un animal."""
-    animal = get_object_or_404(
-        Animal.objects.select_related('finca', 'madre'),
-        crotal=crotal
+    """
+    Ficha detallada de un animal.
+    Búsqueda defensiva ante crotales históricos duplicados (prioriza VIVO, luego el último en BAJA).
+    """
+    animal = (
+        Animal.objects.filter(crotal=crotal, estado_vital='VIVO')
+        .select_related('finca', 'madre')
+        .prefetch_related('partos_como_madre__cria')
+        .first()
     )
+    if not animal:
+        animal = (
+            Animal.objects.filter(crotal=crotal)
+            .select_related('finca', 'madre')
+            .prefetch_related('partos_como_madre__cria')
+            .order_by('-id')
+            .first()
+        )
+    if not animal:
+        raise Http404('Animal no encontrado')
+
     partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
     incidencias = animal.incidencias.all()
     
@@ -201,10 +217,12 @@ def animal_create(request):
 
 
 def animal_baja(request, crotal):
-    """Dar de baja un animal."""
-    animal = get_object_or_404(Animal, crotal=crotal, estado_vital='VIVO')
+    """Dar de baja un animal (defensivo ante crotales históricos)."""
+    animal = Animal.objects.filter(crotal=crotal, estado_vital='VIVO').first()
+    if not animal:
+        raise Http404('Animal no encontrado o ya en estado BAJA')
+        
     form = AnimalBajaForm(request.POST or None)
-    
     if request.method == 'POST' and form.is_valid():
         motivo = form.cleaned_data.get('motivo', '')
         dar_de_baja_animal(animal, motivo)
@@ -215,8 +233,11 @@ def animal_baja(request, crotal):
 
 
 def animal_traslado(request, crotal):
-    """Trasladar un animal a otra finca/sub_ubicación."""
-    animal = get_object_or_404(Animal, crotal=crotal, estado_vital='VIVO')
+    """Trasladar un animal a otra finca/sub_ubicación (defensivo ante crotales históricos)."""
+    animal = Animal.objects.filter(crotal=crotal, estado_vital='VIVO').first()
+    if not animal:
+        raise Http404('Animal no encontrado o ya en estado BAJA')
+        
     form = TrasladoForm(request.POST or None)
     advertencia_reproductora = False
     
@@ -256,7 +277,7 @@ def parto_create(request):
     madre_crotal = request.GET.get('madre')
     initial = {}
     if madre_crotal:
-        madre = Animal.objects.filter(crotal=madre_crotal, sexo='H').first()
+        madre = Animal.objects.filter(crotal=madre_crotal, sexo='H', estado_vital='VIVO').first()
         if madre:
             initial['madre'] = madre.pk
 
@@ -385,6 +406,7 @@ def finca_delete(request, pk):
     finca = get_object_or_404(Finca, pk=pk)
     animales_vivos = list(finca.animales.filter(estado_vital='VIVO'))
     otras_fincas = Finca.objects.exclude(pk=finca.pk)
+    active_option = 'opcion_a'
     
     if len(animales_vivos) == 0:
         if request.method == 'POST':
@@ -396,15 +418,17 @@ def finca_delete(request, pk):
             'finca': finca,
             'animales_vivos': [],
             'otras_fincas': otras_fincas,
+            'active_option': active_option,
         })
 
     if request.method == 'POST':
         opcion = request.POST.get('opcion')
+        active_option = opcion or 'opcion_a'
         
         if opcion == 'opcion_a':
             destino_id = request.POST.get('finca_destino')
             if not destino_id:
-                messages.error(request, 'Debes seleccionar una finca de destino.')
+                messages.error(request, '⚠️ Debes seleccionar una finca de destino para el traslado total.')
             else:
                 finca_destino = get_object_or_404(Finca, pk=destino_id)
                 with transaction.atomic():
@@ -415,7 +439,7 @@ def finca_delete(request, pk):
                 return redirect('finca_list')
 
         elif opcion == 'opcion_b':
-            motivo = request.POST.get('motivo_baja', 'Vaciado por eliminación de finca')
+            motivo = request.POST.get('motivo_baja', f'Vaciado por eliminación de finca {finca.nombre}')
             with transaction.atomic():
                 for animal in animales_vivos:
                     dar_de_baja_animal(animal, motivo)
@@ -426,21 +450,28 @@ def finca_delete(request, pk):
         elif opcion == 'opcion_c':
             destino_id = request.POST.get('finca_destino_c')
             finca_destino = Finca.objects.filter(pk=destino_id).first() if destino_id else None
-            with transaction.atomic():
-                for animal in animales_vivos:
-                    accion = request.POST.get(f'accion_{animal.pk}', 'baja')
-                    if accion == 'trasladar' and finca_destino:
-                        trasladar_animal(animal, finca_destino, 'PASTO')
-                    else:
-                        dar_de_baja_animal(animal, f'Baja granular por eliminación de {finca.nombre}')
-                finca.delete()
-            messages.success(request, f'✅ Finca "{finca.nombre}" eliminada con resolución granular.')
-            return redirect('finca_list')
+            
+            # Comprobar si se seleccionó trasladar para algún animal sin haber seleccionado finca destino
+            hay_traslado = any(request.POST.get(f'accion_{a.pk}') == 'trasladar' for a in animales_vivos)
+            if hay_traslado and not finca_destino:
+                messages.error(request, '⚠️ Debes seleccionar la Finca Destino para los animales marcados como "Trasladar".')
+            else:
+                with transaction.atomic():
+                    for animal in animales_vivos:
+                        accion = request.POST.get(f'accion_{animal.pk}', 'baja')
+                        if accion == 'trasladar' and finca_destino:
+                            trasladar_animal(animal, finca_destino, 'PASTO')
+                        else:
+                            dar_de_baja_animal(animal, f'Baja por eliminación granular de finca {finca.nombre}')
+                    finca.delete()
+                messages.success(request, f'✅ Finca "{finca.nombre}" eliminada correctamente con resolución granular.')
+                return redirect('finca_list')
 
     return render(request, 'ganaderia/finca_delete_assistant.html', {
         'finca': finca,
         'animales_vivos': animales_vivos,
         'otras_fincas': otras_fincas,
+        'active_option': active_option,
     })
 
 
@@ -476,7 +507,6 @@ def exportar_csv(request):
     response = HttpResponse(content_type='text/csv; charset=utf-8')
     response['Content-Disposition'] = f'attachment; filename="censo_ganadero_{date.today().strftime("%Y%m%d")}.csv"'
     
-    # Escribir BOM UTF-8 para compatibilidad en Excel en español
     response.write('\ufeff')
     writer = csv.writer(response, delimiter=';')
     
@@ -492,6 +522,7 @@ def exportar_csv(request):
         crotal_madre = a.madre.crotal if a.madre else '-'
         n_partos = a.partos_como_madre.count() if a.sexo == 'H' else 0
         dias_ultimo_parto = a.dias_desde_ultimo_parto if (a.sexo == 'H' and a.dias_desde_ultimo_parto is not None) else '-'
+        finca_nombre = a.finca.nombre if a.finca else '-'
         
         writer.writerow([
             a.crotal,
@@ -499,7 +530,7 @@ def exportar_csv(request):
             a.raza,
             a.fecha_nacimiento.strftime('%Y-%m-%d'),
             a.edad_dias,
-            a.finca.nombre,
+            finca_nombre,
             a.get_sub_ubicacion_display(),
             dias_cebadero,
             crotal_madre,
@@ -525,7 +556,6 @@ def exportar_excel(request):
     ]
     ws.append(headers)
     
-    # Estilo de cabecera
     header_fill = PatternFill(start_color="1E3A8A", end_color="1E3A8A", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True)
     for col_num in range(1, len(headers) + 1):
@@ -539,6 +569,7 @@ def exportar_excel(request):
         crotal_madre = a.madre.crotal if a.madre else '-'
         n_partos = a.partos_como_madre.count() if a.sexo == 'H' else 0
         dias_ultimo_parto = a.dias_desde_ultimo_parto if (a.sexo == 'H' and a.dias_desde_ultimo_parto is not None) else '-'
+        finca_nombre = a.finca.nombre if a.finca else '-'
         
         ws.append([
             a.crotal,
@@ -546,7 +577,7 @@ def exportar_excel(request):
             a.raza,
             a.fecha_nacimiento.strftime('%Y-%m-%d'),
             a.edad_dias,
-            a.finca.nombre,
+            finca_nombre,
             a.get_sub_ubicacion_display(),
             dias_cebadero,
             crotal_madre,
