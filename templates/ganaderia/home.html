@@ -47,7 +47,7 @@
         </div>
     </div>
     <div class="card-body">
-        <form id="filter-form" 
+        <form id="formulario-filtros" 
               hx-get="{% url 'home' %}" 
               hx-target="#animal-grid-tbody" 
               hx-trigger="change, keyup delay:300ms"
@@ -113,7 +113,7 @@
 
 <script>
 function updateExportUrls() {
-    var form = document.getElementById('filter-form');
+    var form = document.getElementById('formulario-filtros') || document.getElementById('filter-form');
     var params = new URLSearchParams(new FormData(form)).toString();
     document.getElementById('btn-export-csv').href = "{% url 'exportar_csv' %}?" + params;
     document.getElementById('btn-export-excel').href = "{% url 'exportar_excel' %}?" + params;

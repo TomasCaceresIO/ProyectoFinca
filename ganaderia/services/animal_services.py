@@ -65,19 +65,34 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
     }
 
 
+def validar_coherencia_madre_parto(madre: Animal, fecha_parto: date):
+    """Validaciones de coherencia biológica y cronológica entre la madre y el parto."""
+    if madre.estado_vital == 'BAJA':
+        raise ValidationError('No se puede registrar un parto para una madre dada de baja.')
+    if madre.fecha_baja and fecha_parto > madre.fecha_baja:
+        raise ValidationError(f'La fecha del parto ({fecha_parto.strftime("%d/%m/%Y")}) no puede ser posterior a la fecha de baja de la madre ({madre.fecha_baja.strftime("%d/%m/%Y")}).')
+    if fecha_parto < madre.fecha_nacimiento:
+        raise ValidationError(f'La fecha del parto ({fecha_parto.strftime("%d/%m/%Y")}) no puede ser anterior al nacimiento de la madre ({madre.fecha_nacimiento.strftime("%d/%m/%Y")}).')
+    if (fecha_parto - madre.fecha_nacimiento).days < 540:
+        raise ValidationError('La madre debe tener al menos 18 meses (540 días) de edad en la fecha del parto.')
+
+
 def validar_intervalo_parto(madre: Animal, fecha_nuevo_parto: date, excluir_parto_id: int = None) -> dict:
     """
     Valida el intervalo entre partos de una misma madre bidireccionalmente
     (tanto con el parto anterior más cercano como con el posterior más cercano).
     
     Regla RN-04: Mínimo 270 días.
+    Excepción de partos gemelares: Múltiples partos en la misma fecha (diferencia 0 días)
+    no disparan Alerta Roja.
     """
     partos = Parto.objects.filter(madre=madre)
     if excluir_parto_id:
         partos = partos.exclude(pk=excluir_parto_id)
 
-    parto_anterior = partos.filter(fecha_parto__lte=fecha_nuevo_parto).order_by('-fecha_parto').first()
-    parto_posterior = partos.filter(fecha_parto__gte=fecha_nuevo_parto).order_by('fecha_parto').first()
+    # Evaluar únicamente contra partos con fechas estrictamente distintas (anteriores o posteriores)
+    parto_anterior = partos.filter(fecha_parto__lt=fecha_nuevo_parto).order_by('-fecha_parto').first()
+    parto_posterior = partos.filter(fecha_parto__gt=fecha_nuevo_parto).order_by('fecha_parto').first()
 
     alerta = False
     dias_anterior = None
@@ -134,6 +149,7 @@ def registrar_parto(
     Registra un parto en la base de datos (mínimo 1 y máximo 2 crías por parto).
     """
     validar_no_futuro(fecha_parto)
+    validar_coherencia_madre_parto(madre, fecha_parto)
 
     lista_crias = []
     if crias is not None:
@@ -235,6 +251,7 @@ def actualizar_parto(parto: Parto, nueva_fecha_parto: date, observaciones: str =
     Modifica la fecha de un parto existente y recalcula sus alertas de intervalo.
     """
     validar_no_futuro(nueva_fecha_parto)
+    validar_coherencia_madre_parto(parto.madre, nueva_fecha_parto)
 
     validacion = validar_intervalo_parto(parto.madre, nueva_fecha_parto, excluir_parto_id=parto.pk)
     parto.fecha_parto = nueva_fecha_parto

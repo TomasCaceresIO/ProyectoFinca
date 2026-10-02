@@ -257,6 +257,19 @@ class PartoForm(forms.ModelForm):
 
     def clean(self):
         cleaned_data = super().clean()
+        madre = cleaned_data.get('madre')
+        fecha_parto = cleaned_data.get('fecha_parto')
+
+        if madre and fecha_parto:
+            if madre.estado_vital == 'BAJA':
+                self.add_error('madre', 'No se puede registrar un parto para una madre dada de baja.')
+            if madre.fecha_baja and fecha_parto > madre.fecha_baja:
+                self.add_error('fecha_parto', 'La fecha del parto no puede ser posterior a la fecha de baja de la madre.')
+            if fecha_parto < madre.fecha_nacimiento:
+                self.add_error('fecha_parto', 'La fecha del parto no puede ser anterior al nacimiento de la madre.')
+            elif (fecha_parto - madre.fecha_nacimiento).days < 540:
+                self.add_error('fecha_parto', 'La madre debe tener al menos 18 meses (540 días) de edad en la fecha del parto.')
+
         crotal1 = cleaned_data.get('crotal_cria_1')
         sexo1 = cleaned_data.get('sexo_cria_1')
         es_gemelar = cleaned_data.get('es_gemelar')
@@ -302,6 +315,22 @@ class PartoEditForm(forms.ModelForm):
         if fecha and fecha > timezone.now().date():
             raise ValidationError(f'La fecha ({fecha.strftime("%d/%m/%Y")}) no puede ser posterior al día de hoy.')
         return fecha
+
+    def clean(self):
+        cleaned_data = super().clean()
+        fecha_parto = cleaned_data.get('fecha_parto')
+        if self.instance and hasattr(self.instance, 'madre') and self.instance.madre and fecha_parto:
+            madre = self.instance.madre
+            if madre.estado_vital == 'BAJA':
+                self.add_error('fecha_parto', 'No se puede registrar un parto para una madre dada de baja.')
+            if madre.fecha_baja and fecha_parto > madre.fecha_baja:
+                self.add_error('fecha_parto', 'La fecha del parto no puede ser posterior a la fecha de baja de la madre.')
+            if fecha_parto < madre.fecha_nacimiento:
+                self.add_error('fecha_parto', 'La fecha del parto no puede ser anterior al nacimiento de la madre.')
+            elif (fecha_parto - madre.fecha_nacimiento).days < 540:
+                self.add_error('fecha_parto', 'La madre debe tener al menos 18 meses (540 días) de edad en la fecha del parto.')
+        return cleaned_data
+
 
 
 

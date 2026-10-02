@@ -10,6 +10,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponse, Http404
 from django.db import transaction
+from django.db.models import Count, Max
 from django.utils import timezone
 
 from .models import Explotacion, Finca, Ubicacion, Animal, Parto, Incidencia
@@ -23,11 +24,17 @@ from .services.animal_services import (
 )
 
 
-def get_filtered_animales(request):
+def get_filtered_animales(request, with_annotations=False):
     """Helper que aplica los mismos filtros multifactor que la tabla principal."""
-    animales = Animal.objects.filter(estado_vital='VIVO').select_related(
-        'finca', 'madre'
-    ).prefetch_related('partos_como_madre')
+    animales = Animal.objects.filter(estado_vital='VIVO').select_related('finca', 'madre')
+    
+    if with_annotations:
+        animales = animales.annotate(
+            total_partos=Count('partos_como_madre'),
+            ultimo_parto_fecha=Max('partos_como_madre__fecha_parto')
+        )
+    else:
+        animales = animales.prefetch_related('partos_como_madre')
     
     finca_id = request.GET.get('finca')
     recinto = request.GET.get('recinto')
@@ -46,10 +53,15 @@ def get_filtered_animales(request):
         
     lista = list(animales)
     if orden == 'dias_parto_desc':
-        lista.sort(
-            key=lambda a: (a.dias_desde_ultimo_parto if a.dias_desde_ultimo_parto is not None else -1),
-            reverse=True
-        )
+        today = date.today()
+        def calc_dias(a):
+            if with_annotations:
+                if a.sexo == 'H' and getattr(a, 'ultimo_parto_fecha', None):
+                    return (today - a.ultimo_parto_fecha).days
+                return -1
+            return a.dias_desde_ultimo_parto if a.dias_desde_ultimo_parto is not None else -1
+
+        lista.sort(key=calc_dias, reverse=True)
     elif orden == 'edad_desc':
         lista.sort(key=lambda a: a.fecha_nacimiento)
     else:
@@ -501,11 +513,12 @@ def incidencias(request):
 
 
 def exportar_csv(request):
-    """Exportación de censo filtrado a archivo CSV Oficial."""
-    animales = get_filtered_animales(request)
+    """Exportación de censo filtrado a archivo CSV Oficial (optimizado para evitar N+1 queries)."""
+    animales = get_filtered_animales(request, with_annotations=True)
+    today = date.today()
     
     response = HttpResponse(content_type='text/csv; charset=utf-8')
-    response['Content-Disposition'] = f'attachment; filename="censo_ganadero_{date.today().strftime("%Y%m%d")}.csv"'
+    response['Content-Disposition'] = f'attachment; filename="censo_ganadero_{today.strftime("%Y%m%d")}.csv"'
     
     response.write('\ufeff')
     writer = csv.writer(response, delimiter=';')
@@ -518,17 +531,23 @@ def exportar_csv(request):
     writer.writerow(headers)
     
     for a in animales:
-        dias_cebadero = (date.today() - a.fecha_entrada_cebadero).days if a.fecha_entrada_cebadero else '-'
+        dias_cebadero = (today - a.fecha_entrada_cebadero).days if a.fecha_entrada_cebadero else '-'
         crotal_madre = a.madre.crotal if a.madre else '-'
-        n_partos = a.partos_como_madre.count() if a.sexo == 'H' else 0
-        dias_ultimo_parto = a.dias_desde_ultimo_parto if (a.sexo == 'H' and a.dias_desde_ultimo_parto is not None) else '-'
+        n_partos = getattr(a, 'total_partos', 0) if a.sexo == 'H' else 0
+        
+        last_date = getattr(a, 'ultimo_parto_fecha', None)
+        if a.sexo == 'H' and last_date:
+            dias_ultimo_parto = (today - last_date).days
+        else:
+            dias_ultimo_parto = '-'
+            
         finca_nombre = a.finca.nombre if a.finca else '-'
         
         writer.writerow([
             a.crotal,
             a.get_sexo_display(),
             a.raza,
-            a.fecha_nacimiento.strftime('%Y-%m-%d'),
+            a.fecha_nacimiento.strftime('%d/%m/%Y'),
             a.edad_dias,
             finca_nombre,
             a.get_sub_ubicacion_display(),
@@ -542,8 +561,9 @@ def exportar_csv(request):
 
 
 def exportar_excel(request):
-    """Exportación de censo filtrado a libro Excel (.xlsx)."""
-    animales = get_filtered_animales(request)
+    """Exportación de censo filtrado a libro Excel (.xlsx) (optimizado para evitar N+1 queries)."""
+    animales = get_filtered_animales(request, with_annotations=True)
+    today = date.today()
     
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -565,17 +585,23 @@ def exportar_excel(request):
         cell.alignment = Alignment(horizontal="center", vertical="center")
         
     for a in animales:
-        dias_cebadero = (date.today() - a.fecha_entrada_cebadero).days if a.fecha_entrada_cebadero else '-'
+        dias_cebadero = (today - a.fecha_entrada_cebadero).days if a.fecha_entrada_cebadero else '-'
         crotal_madre = a.madre.crotal if a.madre else '-'
-        n_partos = a.partos_como_madre.count() if a.sexo == 'H' else 0
-        dias_ultimo_parto = a.dias_desde_ultimo_parto if (a.sexo == 'H' and a.dias_desde_ultimo_parto is not None) else '-'
+        n_partos = getattr(a, 'total_partos', 0) if a.sexo == 'H' else 0
+        
+        last_date = getattr(a, 'ultimo_parto_fecha', None)
+        if a.sexo == 'H' and last_date:
+            dias_ultimo_parto = (today - last_date).days
+        else:
+            dias_ultimo_parto = '-'
+            
         finca_nombre = a.finca.nombre if a.finca else '-'
         
         ws.append([
             a.crotal,
             a.get_sexo_display(),
             a.raza,
-            a.fecha_nacimiento.strftime('%Y-%m-%d'),
+            a.fecha_nacimiento.strftime('%d/%m/%Y'),
             a.edad_dias,
             finca_nombre,
             a.get_sub_ubicacion_display(),
