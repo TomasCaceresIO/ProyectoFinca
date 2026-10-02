@@ -1,18 +1,30 @@
 {% extends 'base.html' %}
 
-{% block title %}Registro de Incidencias - Gestión Ganadera{% endblock %}
+{% block title %}Incidencias y Bajas - Gestión Ganadera{% endblock %}
 
 {% block content %}
 <div class="page-header">
     <div>
-        <h1 class="page-title">⚠️ Registro de Incidencias y Alertas</h1>
-        <p class="page-subtitle">Gestión de alertas rojas (intervalo &lt; 270d) y alertas amarillas (crotal histórico)</p>
+        <h1 class="page-title">⚠️ Registro de Incidencias e Histórico de Bajas</h1>
+        <p class="page-subtitle">Alertas biológicas de partos y registro histórico de salidas/bajas de ganado</p>
     </div>
 </div>
 
+<!-- Tabs selector -->
+<div class="d-flex gap-2 mb-3 border-bottom pb-2">
+    <a href="?tab=alertas" class="btn {% if tab != 'bajas' %}btn-primary{% else %}btn-outline{% endif %}">
+        🚨 Alertas Normativas (Intervalo &lt; 270d)
+    </a>
+    <a href="?tab=bajas" class="btn {% if tab == 'bajas' %}btn-primary{% else %}btn-outline{% endif %}">
+        📜 Histórico de Bajas y Salidas ({{ bajas.count }})
+    </a>
+</div>
+
+{% if tab != 'bajas' %}
+<!-- TAB 1: ALERTAS NORMATIVAS -->
 <div class="card mb-4">
     <div class="card-header">
-        <h3>🚨 Incidencias Activas</h3>
+        <h3>🚨 Alertas Activas de Partos e Intervalos</h3>
     </div>
     <div class="card-body">
         <div class="table-responsive">
@@ -65,29 +77,63 @@
     </div>
 </div>
 
-{% if incidencias_resueltas %}
-<div class="card">
-    <div class="card-header">
-        <h3>✅ Histórico de Incidencias Resueltas</h3>
+{% else %}
+<!-- TAB 2: HISTÓRICO DE BAJAS Y SALIDAS -->
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h3>📜 Histórico de Animales Dados de Baja</h3>
+        <form method="get" class="d-flex gap-1">
+            <input type="hidden" name="tab" value="bajas">
+            <input type="text" name="q_baja" class="form-control form-control-sm" 
+                   placeholder="Buscar por crotal..." value="{{ q_baja }}" style="width: 200px;">
+            <button type="submit" class="btn btn-sm btn-primary">🔍 Buscar</button>
+            {% if q_baja %}
+            <a href="?tab=bajas" class="btn btn-sm btn-outline">Limpiar</a>
+            {% endif %}
+        </form>
     </div>
     <div class="card-body">
         <div class="table-responsive">
-            <table class="table text-muted">
+            <table class="table">
                 <thead>
                     <tr>
-                        <th>Animal</th>
-                        <th>Tipo</th>
-                        <th>Descripción</th>
-                        <th>Fecha</th>
+                        <th>Crotal (4D)</th>
+                        <th>Sexo</th>
+                        <th>Raza</th>
+                        <th>Fecha Nacimiento</th>
+                        <th>Fecha Baja/Salida</th>
+                        <th>Motivo Baja</th>
+                        <th>Última Ubicación</th>
+                        <th>Crotal Madre</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {% for inc in incidencias_resueltas %}
+                    {% for baja in bajas %}
                     <tr>
-                        <td>Crotal {{ inc.animal.crotal }}</td>
-                        <td>{{ inc.get_tipo_display }}</td>
-                        <td>{{ inc.descripcion }}</td>
-                        <td><small>{{ inc.created_at|date:"Y-m-d" }}</small></td>
+                        <td>
+                            <a href="{% url 'animal_detail' crotal=baja.crotal %}" class="font-weight-bold">
+                                <strong>{{ baja.crotal }}</strong>
+                            </a>
+                        </td>
+                        <td>{{ baja.get_sexo_display }}</td>
+                        <td>{{ baja.raza }}</td>
+                        <td>{{ baja.fecha_nacimiento|date:"Y-m-d" }}</td>
+                        <td><span class="badge badge-danger">{{ baja.fecha_baja|date:"Y-m-d"|default:"-" }}</span></td>
+                        <td>{{ baja.motivo_baja|default:"-" }}</td>
+                        <td>{{ baja.finca.nombre }} ({{ baja.sub_ubicacion }})</td>
+                        <td>
+                            {% if baja.madre %}
+                            <a href="{% url 'animal_detail' crotal=baja.madre.crotal %}">{{ baja.madre.crotal }}</a>
+                            {% else %}
+                            <span class="text-muted">Desconocida</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% empty %}
+                    <tr>
+                        <td colspan="8" class="text-center text-muted py-3">
+                            No se encontraron registros en el historial de bajas.
+                        </td>
                     </tr>
                     {% endfor %}
                 </tbody>

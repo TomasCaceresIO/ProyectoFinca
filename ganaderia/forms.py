@@ -46,6 +46,23 @@ class ExplotacionSetupForm(forms.Form):
     )
 
 
+class ExplotacionForm(forms.ModelForm):
+    """Formulario para editar el nombre y Código REGA de la explotación."""
+    class Meta:
+        model = Explotacion
+        fields = ['nombre', 'codigo_rega']
+        widgets = {
+            'nombre': forms.TextInput(attrs={
+                'class': 'form-control',
+                'placeholder': 'Ej: Ganadería Las Encinas'
+            }),
+            'codigo_rega': forms.TextInput(attrs={
+                'class': 'form-control',
+                'placeholder': 'Ej: ES-190420001234'
+            }),
+        }
+
+
 class FincaForm(forms.Form):
     """Formulario para dar de alta una nueva finca con sus recintos."""
     nombre = forms.CharField(
@@ -147,7 +164,6 @@ class PartoForm(forms.ModelForm):
     Exige obligatoriamente la Cría 1 (Mínimo 1 cría).
     Si se marca 'es_gemelar', exige la Cría 2 (Máximo 2 crías).
     """
-    # Cría 1 (Obligatoria)
     crotal_cria_1 = forms.CharField(
         max_length=4,
         required=True,
@@ -171,13 +187,11 @@ class PartoForm(forms.ModelForm):
         widget=forms.TextInput(attrs={'class': 'form-control'}),
     )
 
-    # Gemelar (Opcional)
     es_gemelar = forms.BooleanField(
         required=False,
         label='Parto gemelar (añadir 2ª cría)',
     )
 
-    # Cría 2 (Obligatoria solo si es_gemelar=True)
     crotal_cria_2 = forms.CharField(
         max_length=4,
         required=False,
