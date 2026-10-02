@@ -248,37 +248,43 @@ def registrar_parto(
 @transaction.atomic
 def actualizar_parto(parto: Parto, nueva_fecha_parto: date, observaciones: str = None) -> Parto:
     """
-    Modifica la fecha de un parto existente y recalcula sus alertas de intervalo.
+    Modifica la fecha de un parto existente y recalcula sus alertas de intervalo y las de todos los partos de la madre.
     """
     validar_no_futuro(nueva_fecha_parto)
     validar_coherencia_madre_parto(parto.madre, nueva_fecha_parto)
 
-    validacion = validar_intervalo_parto(parto.madre, nueva_fecha_parto, excluir_parto_id=parto.pk)
     parto.fecha_parto = nueva_fecha_parto
     if observaciones is not None:
         parto.observaciones = observaciones
-    
-    parto.alerta_intervalo = (validacion['alerta'] == 'ROJO')
     parto.save()
 
-    incidencias = Incidencia.objects.filter(parto=parto)
-    if parto.alerta_intervalo:
-        if not incidencias.exists():
-            Incidencia.objects.create(
-                animal=parto.madre,
-                tipo='ROJO',
-                descripcion=f'Intervalo de parto recalculado (< {INTERVALO_MINIMO_PARTOS} días).',
-                parto=parto,
-            )
-        else:
-            incidencias.update(
-                resuelta=False,
-                descripcion=f'Intervalo entre partos: {validacion["dias_intervalo"]} días (mínimo: 270d).'
-            )
-    else:
-        # Si el intervalo recalculado pasa a ser >= 270d, se resuelve y desactiva la incidencia
-        incidencias.update(resuelta=True)
+    # Recalcular alertas de intervalo para TODOS los partos de la madre (objetivo + adyacentes)
+    todos_partos = Parto.objects.filter(madre=parto.madre)
+    for p in todos_partos:
+        val = validar_intervalo_parto(p.madre, p.fecha_parto, excluir_parto_id=p.pk)
+        es_rojo = (val['alerta'] == 'ROJO')
+        p.alerta_intervalo = es_rojo
+        p.save()
 
+        incidencias = Incidencia.objects.filter(parto=p)
+        if es_rojo:
+            if not incidencias.exists():
+                Incidencia.objects.create(
+                    animal=p.madre,
+                    tipo='ROJO',
+                    descripcion=f'Intervalo de parto recalculado (< {INTERVALO_MINIMO_PARTOS} días).',
+                    parto=p,
+                )
+            else:
+                incidencias.update(
+                    resuelta=False,
+                    descripcion=f'Intervalo entre partos: {val["dias_intervalo"]} días (mínimo: 270d).'
+                )
+        else:
+            # Si el intervalo recalculado pasa a ser >= 270d, se resuelve y desactiva la incidencia
+            incidencias.update(resuelta=True)
+
+    parto.refresh_from_db()
     return parto
 
 

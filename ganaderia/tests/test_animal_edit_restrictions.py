@@ -133,3 +133,22 @@ class AnimalEditRestrictionsTestCase(TestCase):
 
         self.assertEqual(animal_editado.sub_ubicacion, 'CEBADERO')
         self.assertEqual(animal_editado.fecha_entrada_cebadero, timezone.now().date())
+
+    def test_no_partial_mutation_on_invalid_form_submission(self):
+        """6. test_no_partial_mutation_on_invalid_form_submission: Envío fallido de formulario no muta BD ni context."""
+        url = reverse('animal_edit', kwargs={'crotal': self.hembra_sin_partos.crotal})
+        response = self.client.post(url, {
+            'crotal': '2222',
+            'sexo': 'H',
+            'raza': 'RETINTA',
+            'fecha_nacimiento': '2099-01-01',  # Fecha invalida (futura)
+            'finca': self.finca.pk,
+            'sub_ubicacion': 'CEBADERO',
+        })
+        self.assertEqual(response.status_code, 200)
+        self.hembra_sin_partos.refresh_from_db()
+        self.assertEqual(self.hembra_sin_partos.sub_ubicacion, 'PASTO')
+        self.assertIsNone(self.hembra_sin_partos.fecha_entrada_cebadero)
+        context_animal = response.context['animal']
+        self.assertEqual(context_animal.sub_ubicacion, 'PASTO')
+

@@ -216,6 +216,7 @@ def animal_edit(request, crotal):
         if form.is_valid():
             alerta_amarilla = getattr(form, '_crotal_alerta', None)
             if alerta_amarilla == 'AMARILLO' and not request.POST.get('confirmar_crotal_historico'):
+                animal.refresh_from_db()
                 partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
                 return render(request, 'ganaderia/animal_detail.html', {
                     'animal': animal,
@@ -227,21 +228,23 @@ def animal_edit(request, crotal):
                     'open_edit_modal': True,
                 })
 
-            animal_actualizado = form.save()
+            with transaction.atomic():
+                animal_actualizado = form.save()
 
-            if alerta_amarilla == 'AMARILLO':
-                Incidencia.objects.create(
-                    animal=animal_actualizado,
-                    tipo='AMARILLO',
-                    descripcion=f'Se reutilizó el crotal {animal_actualizado.crotal} previamente asignado a un animal en baja.'
-                )
-                messages.warning(request, f'⚠️ Animal {animal_actualizado.crotal} actualizado con aviso de crotal histórico.')
-            else:
-                messages.success(request, f'✅ Datos del animal {animal_actualizado.crotal} actualizados correctamente.')
+                if alerta_amarilla == 'AMARILLO':
+                    Incidencia.objects.create(
+                        animal=animal_actualizado,
+                        tipo='AMARILLO',
+                        descripcion=f'Se reutilizó el crotal {animal_actualizado.crotal} previamente asignado a un animal en baja.'
+                    )
+                    messages.warning(request, f'⚠️ Animal {animal_actualizado.crotal} actualizado con aviso de crotal histórico.')
+                else:
+                    messages.success(request, f'✅ Datos del animal {animal_actualizado.crotal} actualizados correctamente.')
 
             return redirect('animal_detail', crotal=animal_actualizado.crotal)
 
         else:
+            animal.refresh_from_db()
             partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
             return render(request, 'ganaderia/animal_detail.html', {
                 'animal': animal,

@@ -109,3 +109,23 @@ class PartosReproductionTestCase(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Sin cría censada")
+
+    def test_actualizar_parto_recalculates_alerts_and_resolves_incidencias(self):
+        """Actualizar fecha de parto a >= 270d recalcula alerta_intervalo a False y marca Incidencia como resuelta."""
+        res1 = registrar_parto(self.madre, date(2023, 1, 1), crias=[{'crotal': '0807', 'sexo': 'M'}])
+        res2 = registrar_parto(self.madre, date(2023, 5, 1), forzar=True, crias=[{'crotal': '0808', 'sexo': 'H'}])
+        p2 = res2['parto']
+
+        self.assertTrue(p2.alerta_intervalo)
+        from ganaderia.models import Incidencia
+        inc = Incidencia.objects.get(parto=p2)
+        self.assertFalse(inc.resuelta)
+
+        # Actualizar fecha de p2 a 2023-11-01 (intervalo de 304 días > 270d)
+        actualizar_parto(p2, date(2023, 11, 1))
+        p2.refresh_from_db()
+        inc.refresh_from_db()
+
+        self.assertFalse(p2.alerta_intervalo)
+        self.assertTrue(inc.resuelta)
+
