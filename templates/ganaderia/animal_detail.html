@@ -11,7 +11,7 @@
             {% if animal.estado_vital == 'VIVO' %}
             <span class="badge badge-success">VIVO</span>
             {% else %}
-            <span class="badge badge-danger">BAJA ({{ animal.fecha_baja|date:"Y-m-d" }})</span>
+            <span class="badge badge-danger">BAJA ({{ animal.fecha_baja|date:"d/m/Y" }})</span>
             {% endif %}
             · {{ animal.get_sexo_display }} · {{ animal.raza }}
         </p>
@@ -37,7 +37,7 @@
                 <tr><th>Crotal:</th><td><strong>{{ animal.crotal }}</strong></td></tr>
                 <tr><th>Sexo:</th><td>{{ animal.get_sexo_display }}</td></tr>
                 <tr><th>Raza:</th><td>{{ animal.raza }}</td></tr>
-                <tr><th>Fecha Nacimiento:</th><td>{{ animal.fecha_nacimiento|date:"Y-m-d" }} ({{ animal.edad_dias }} días)</td></tr>
+                <tr><th>Fecha Nacimiento:</th><td>{{ animal.fecha_nacimiento|date:"d/m/Y" }} ({{ animal.edad_dias }} días)</td></tr>
                 <tr><th>Finca Actual:</th><td>{{ animal.finca.nombre }}</td></tr>
                 <tr>
                     <th>Recinto (Sub-ubicación):</th>
@@ -52,7 +52,7 @@
                     </td>
                 </tr>
                 {% if animal.fecha_entrada_cebadero %}
-                <tr><th>Entrada a Cebadero:</th><td>{{ animal.fecha_entrada_cebadero|date:"Y-m-d" }}</td></tr>
+                <tr><th>Entrada a Cebadero:</th><td>{{ animal.fecha_entrada_cebadero|date:"d/m/Y" }}</td></tr>
                 {% endif %}
                 <tr>
                     <th>Madre:</th>
@@ -112,7 +112,7 @@
                 <tbody>
                     {% for parto in partos %}
                     <tr>
-                        <td><strong>{{ parto.fecha_parto|date:"Y-m-d" }}</strong></td>
+                        <td><strong>{{ parto.fecha_parto|date:"d/m/Y" }}</strong></td>
                         <td>
                             {% if parto.alerta_intervalo %}
                             <span class="badge badge-danger">⚠️ Alerta &lt; 270 días</span>
@@ -173,7 +173,7 @@
                             <a href="{% url 'animal_detail' crotal=hijo.crotal %}"><strong>{{ hijo.crotal }}</strong></a>
                         </td>
                         <td>{{ hijo.get_sexo_display }}</td>
-                        <td>{{ hijo.fecha_nacimiento|date:"Y-m-d" }}</td>
+                        <td>{{ hijo.fecha_nacimiento|date:"d/m/Y" }}</td>
                         <td>
                             {% if hijo.estado_vital == 'VIVO' %}
                             <span class="badge badge-success">VIVO</span>

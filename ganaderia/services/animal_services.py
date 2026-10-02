@@ -5,7 +5,7 @@ from datetime import date
 from django.db import transaction
 from django.core.exceptions import ValidationError
 from django.utils import timezone
-from ..models import Animal, Parto, Incidencia, Finca
+from ..models import Animal, Parto, Incidencia, Finca, validar_no_futuro
 
 INTERVALO_MINIMO_PARTOS = 270
 
@@ -133,6 +133,8 @@ def registrar_parto(
     """
     Registra un parto en la base de datos (mínimo 1 y máximo 2 crías por parto).
     """
+    validar_no_futuro(fecha_parto)
+
     lista_crias = []
     if crias is not None:
         if isinstance(crias, list):
@@ -232,6 +234,8 @@ def actualizar_parto(parto: Parto, nueva_fecha_parto: date, observaciones: str =
     """
     Modifica la fecha de un parto existente y recalcula sus alertas de intervalo.
     """
+    validar_no_futuro(nueva_fecha_parto)
+
     validacion = validar_intervalo_parto(parto.madre, nueva_fecha_parto, excluir_parto_id=parto.pk)
     parto.fecha_parto = nueva_fecha_parto
     if observaciones is not None:

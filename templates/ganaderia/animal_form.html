@@ -42,6 +42,7 @@
                 <div class="form-group mb-2">
                     <label class="form-label" for="id_fecha_nacimiento">Fecha de Nacimiento *</label>
                     {{ form.fecha_nacimiento }}
+                    {% if form.fecha_nacimiento.errors %}<div class="text-danger"><small>{{ form.fecha_nacimiento.errors.0 }}</small></div>{% endif %}
                 </div>
 
                 <div class="grid-2 gap-2 mb-2">

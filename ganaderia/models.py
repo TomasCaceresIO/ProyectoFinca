@@ -2,8 +2,18 @@
 Modelos de datos para el sistema de Gestión Ganadera MVP.
 """
 from django.db import models
+from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.utils import timezone
+
+
+def validar_no_futuro(value):
+    """Validador reutilizable para impedir fechas posteriores al día de hoy."""
+    if value and value > timezone.now().date():
+        raise ValidationError(
+            f'La fecha ({value.strftime("%d/%m/%Y")}) no puede ser posterior al día de hoy.'
+        )
+
 
 
 class Explotacion(models.Model):
@@ -122,7 +132,8 @@ class Animal(models.Model):
         verbose_name='Sexo'
     )
     fecha_nacimiento = models.DateField(
-        verbose_name='Fecha de nacimiento'
+        verbose_name='Fecha de nacimiento',
+        validators=[validar_no_futuro]
     )
     raza = models.CharField(
         max_length=50,
@@ -138,7 +149,8 @@ class Animal(models.Model):
     fecha_baja = models.DateField(
         null=True,
         blank=True,
-        verbose_name='Fecha de baja'
+        verbose_name='Fecha de baja',
+        validators=[validar_no_futuro]
     )
     motivo_baja = models.CharField(
         max_length=200,
@@ -162,7 +174,8 @@ class Animal(models.Model):
     fecha_entrada_cebadero = models.DateField(
         null=True,
         blank=True,
-        verbose_name='Fecha de entrada al cebadero'
+        verbose_name='Fecha de entrada al cebadero',
+        validators=[validar_no_futuro]
     )
     madre = models.ForeignKey(
         'self',
@@ -186,6 +199,14 @@ class Animal(models.Model):
                 name='unique_crotal_vivo'
             )
         ]
+
+    def clean(self):
+        super().clean()
+        validar_no_futuro(self.fecha_nacimiento)
+        if self.fecha_baja:
+            validar_no_futuro(self.fecha_baja)
+        if self.fecha_entrada_cebadero:
+            validar_no_futuro(self.fecha_entrada_cebadero)
 
     def __str__(self):
         return f'Crotal {self.crotal} ({self.get_sexo_display()}) - {self.get_estado_vital_display()}'
@@ -230,8 +251,14 @@ class Parto(models.Model):
         verbose_name='Madre'
     )
     fecha_parto = models.DateField(
-        verbose_name='Fecha del parto'
+        verbose_name='Fecha del parto',
+        validators=[validar_no_futuro]
     )
+
+    def clean(self):
+        super().clean()
+        validar_no_futuro(self.fecha_parto)
+
     cria = models.ForeignKey(
         Animal,
         null=True,

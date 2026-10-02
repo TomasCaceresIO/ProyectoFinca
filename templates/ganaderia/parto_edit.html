@@ -9,7 +9,7 @@
             <h2>✏️ Modificar Parto (Madre Crotal {{ parto.madre.crotal }})</h2>
         </div>
         <div class="card-body">
-            <p><strong>Parto actual:</strong> {{ parto.fecha_parto|date:"Y-m-d" }}</p>
+            <p><strong>Parto actual:</strong> {{ parto.fecha_parto|date:"d/m/Y" }}</p>
             <p class="text-muted"><small>Al modificar la fecha, el sistema verificará automáticamente el intervalo de 270 días con los partos anterior y posterior más cercanos.</small></p>
 
             <form method="post">
@@ -17,6 +17,7 @@
                 <div class="form-group mb-3">
                     <label class="form-label">Nueva Fecha de Parto *</label>
                     {{ form.fecha_parto }}
+                    {% if form.fecha_parto.errors %}<div class="text-danger"><small>{{ form.fecha_parto.errors.0 }}</small></div>{% endif %}
                 </div>
 
                 <div class="form-group mb-3">

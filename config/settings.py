@@ -65,6 +65,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'ganaderia.context_processors.global_context',
             ],
         },
     },
@@ -91,6 +92,9 @@ LANGUAGE_CODE = 'es-es'
 TIME_ZONE = 'Europe/Madrid'
 USE_I18N = True
 USE_TZ = True
+DATE_FORMAT = 'd/m/Y'
+DATE_INPUT_FORMATS = ['%d/%m/%Y', '%Y-%m-%d']
+
 
 # --- ARCHIVOS ESTÁTICOS ---
 STATIC_URL = '/static/'

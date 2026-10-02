@@ -26,7 +26,7 @@
     </td>
     <td>
         {% if animal.fecha_entrada_cebadero %}
-        <small>{{ animal.fecha_entrada_cebadero|date:"Y-m-d" }}</small>
+        <small>{{ animal.fecha_entrada_cebadero|date:"d/m/Y" }}</small>
         {% else %}
         -
         {% endif %}
@@ -34,7 +34,7 @@
     <td>
         {% if animal.sexo == 'H' %}
             {% if animal.ultimo_parto %}
-                {{ animal.ultimo_parto.fecha_parto|date:"Y-m-d" }}
+                {{ animal.ultimo_parto.fecha_parto|date:"d/m/Y" }}
                 <br>
                 <small class="text-muted">({{ animal.dias_desde_ultimo_parto }} d)</small>
             {% else %}

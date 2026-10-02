@@ -3,8 +3,10 @@ Formularios para la aplicación Gestión Ganadera.
 """
 from django import forms
 from django.core.exceptions import ValidationError
+from django.utils import timezone
 from .models import Explotacion, Finca, Animal, Parto, Ubicacion
 from .services.animal_services import validar_crotal
+
 
 
 class ExplotacionSetupForm(forms.Form):
@@ -127,6 +129,7 @@ class AnimalForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['madre'].queryset = Animal.objects.filter(sexo='H')
+        self.fields['fecha_nacimiento'].widget.attrs['max'] = timezone.now().date().strftime('%Y-%m-%d')
 
     def clean_crotal(self):
         crotal = self.cleaned_data.get('crotal')
@@ -139,6 +142,12 @@ class AnimalForm(forms.ModelForm):
         self._crotal_alerta = resultado.get('alerta')
         self._crotal_mensaje = resultado.get('mensaje')
         return crotal
+
+    def clean_fecha_nacimiento(self):
+        fecha = self.cleaned_data.get('fecha_nacimiento')
+        if fecha and fecha > timezone.now().date():
+            raise ValidationError(f'La fecha ({fecha.strftime("%d/%m/%Y")}) no puede ser posterior al día de hoy.')
+        return fecha
 
 
 class AnimalBajaForm(forms.Form):
@@ -238,6 +247,13 @@ class PartoForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['madre'].queryset = Animal.objects.filter(sexo='H', estado_vital='VIVO')
+        self.fields['fecha_parto'].widget.attrs['max'] = timezone.now().date().strftime('%Y-%m-%d')
+
+    def clean_fecha_parto(self):
+        fecha = self.cleaned_data.get('fecha_parto')
+        if fecha and fecha > timezone.now().date():
+            raise ValidationError(f'La fecha ({fecha.strftime("%d/%m/%Y")}) no puede ser posterior al día de hoy.')
+        return fecha
 
     def clean(self):
         cleaned_data = super().clean()
@@ -276,6 +292,17 @@ class PartoEditForm(forms.ModelForm):
                 'rows': 3,
             }),
         }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['fecha_parto'].widget.attrs['max'] = timezone.now().date().strftime('%Y-%m-%d')
+
+    def clean_fecha_parto(self):
+        fecha = self.cleaned_data.get('fecha_parto')
+        if fecha and fecha > timezone.now().date():
+            raise ValidationError(f'La fecha ({fecha.strftime("%d/%m/%Y")}) no puede ser posterior al día de hoy.')
+        return fecha
+
 
 
 class TrasladoForm(forms.Form):

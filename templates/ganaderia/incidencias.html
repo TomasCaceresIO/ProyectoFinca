@@ -54,7 +54,7 @@
                             {% endif %}
                         </td>
                         <td>{{ inc.descripcion }}</td>
-                        <td><small>{{ inc.created_at|date:"Y-m-d H:i" }}</small></td>
+                        <td><small>{{ inc.created_at|date:"d/m/Y H:i" }}</small></td>
                         <td>
                             <div class="d-flex gap-1">
                                 {% if inc.parto %}
@@ -117,8 +117,8 @@
                         </td>
                         <td>{{ baja.get_sexo_display }}</td>
                         <td>{{ baja.raza }}</td>
-                        <td>{{ baja.fecha_nacimiento|date:"Y-m-d" }}</td>
-                        <td><span class="badge badge-danger">{{ baja.fecha_baja|date:"Y-m-d"|default:"-" }}</span></td>
+                        <td>{{ baja.fecha_nacimiento|date:"d/m/Y" }}</td>
+                        <td><span class="badge badge-danger">{{ baja.fecha_baja|date:"d/m/Y"|default:"-" }}</span></td>
                         <td>{{ baja.motivo_baja|default:"-" }}</td>
                         <td>{{ baja.finca.nombre }} ({{ baja.sub_ubicacion }})</td>
                         <td>
