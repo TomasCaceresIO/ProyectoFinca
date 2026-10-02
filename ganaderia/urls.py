@@ -5,6 +5,9 @@ urlpatterns = [
     # Setup Wizard
     path('setup/', views.setup_wizard, name='setup_wizard'),
     
+    # Explotacion
+    path('explotacion/editar/', views.explotacion_edit, name='explotacion_edit'),
+    
     # Home
     path('', views.home, name='home'),
     
@@ -22,9 +25,14 @@ urlpatterns = [
     # Fincas
     path('fincas/', views.finca_list, name='finca_list'),
     path('fincas/nueva/', views.finca_create, name='finca_create'),
+    path('fincas/<int:pk>/eliminar/', views.finca_delete, name='finca_delete'),
     
-    # Incidencias
+    # Incidencias / Bajas
     path('incidencias/', views.incidencias, name='incidencias'),
+    
+    # Exportaciones (CSV / Excel)
+    path('exportar/csv/', views.exportar_csv, name='exportar_csv'),
+    path('exportar/excel/', views.exportar_excel, name='exportar_excel'),
     
     # API endpoints
     path('api/validar-crotal/', views.api_validar_crotal, name='api_validar_crotal'),

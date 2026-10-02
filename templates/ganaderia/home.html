@@ -39,6 +39,12 @@
 <div class="card mb-3">
     <div class="card-header d-flex justify-content-between align-items-center">
         <h3>📊 Censo Activo (Filtros Multifactor)</h3>
+        <div class="d-flex gap-1">
+            <a id="btn-export-csv" href="{% url 'exportar_csv' %}?finca={{ filtros.finca_id|default:'' }}&recinto={{ filtros.recinto|default:'' }}&sexo={{ filtros.sexo|default:'' }}&raza={{ filtros.raza|default:'' }}&orden={{ filtros.orden|default:'' }}" 
+               class="btn btn-sm btn-outline">📥 CSV Oficial</a>
+            <a id="btn-export-excel" href="{% url 'exportar_excel' %}?finca={{ filtros.finca_id|default:'' }}&recinto={{ filtros.recinto|default:'' }}&sexo={{ filtros.sexo|default:'' }}&raza={{ filtros.raza|default:'' }}&orden={{ filtros.orden|default:'' }}" 
+               class="btn btn-sm btn-primary">📥 Excel (.xlsx)</a>
+        </div>
     </div>
     <div class="card-body">
         <form id="filter-form" 
@@ -48,7 +54,7 @@
               class="grid-4 gap-2 mb-3">
             <div>
                 <label class="form-label"><small>Finca</small></label>
-                <select name="finca" class="form-control">
+                <select name="finca" class="form-control" onchange="updateExportUrls()">
                     <option value="">Todas las fincas</option>
                     {% for f in fincas %}
                     <option value="{{ f.id }}" {% if filtros.finca_id == f.id|stringformat:"s" %}selected{% endif %}>{{ f.nombre }}</option>
@@ -57,7 +63,7 @@
             </div>
             <div>
                 <label class="form-label"><small>Recinto (Sub-ubicación)</small></label>
-                <select name="recinto" class="form-control">
+                <select name="recinto" class="form-control" onchange="updateExportUrls()">
                     <option value="">Todos los recintos</option>
                     <option value="PASTO" {% if filtros.recinto == 'PASTO' %}selected{% endif %}>🌱 Pasto</option>
                     <option value="CEBADERO" {% if filtros.recinto == 'CEBADERO' %}selected{% endif %}>🌾 Cebadero</option>
@@ -66,7 +72,7 @@
             </div>
             <div>
                 <label class="form-label"><small>Sexo</small></label>
-                <select name="sexo" class="form-control">
+                <select name="sexo" class="form-control" onchange="updateExportUrls()">
                     <option value="">Ambos sexos</option>
                     <option value="H" {% if filtros.sexo == 'H' %}selected{% endif %}>Hembra</option>
                     <option value="M" {% if filtros.sexo == 'M' %}selected{% endif %}>Macho</option>
@@ -74,7 +80,7 @@
             </div>
             <div>
                 <label class="form-label"><small>Ordenación</small></label>
-                <select name="orden" class="form-control">
+                <select name="orden" class="form-control" onchange="updateExportUrls()">
                     <option value="crotal" {% if filtros.orden == 'crotal' %}selected{% endif %}>Crotal</option>
                     <option value="dias_parto_desc" {% if filtros.orden == 'dias_parto_desc' %}selected{% endif %}>Días desde último parto (desc)</option>
                     <option value="edad_desc" {% if filtros.orden == 'edad_desc' %}selected{% endif %}>Edad (más viejos primero)</option>
@@ -104,4 +110,13 @@
         </div>
     </div>
 </div>
+
+<script>
+function updateExportUrls() {
+    var form = document.getElementById('filter-form');
+    var params = new URLSearchParams(new FormData(form)).toString();
+    document.getElementById('btn-export-csv').href = "{% url 'exportar_csv' %}?" + params;
+    document.getElementById('btn-export-excel').href = "{% url 'exportar_excel' %}?" + params;
+}
+</script>
 {% endblock %}

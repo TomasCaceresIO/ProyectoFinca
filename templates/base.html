@@ -16,8 +16,9 @@
         </a>
         <ul class="navbar-nav">
             <li><a href="{% url 'home' %}" {% if request.resolver_match.url_name == 'home' %}class="active"{% endif %}>Home / Censo</a></li>
-            <li><a href="{% url 'incidencias' %}" {% if 'incidencia' in request.resolver_match.url_name %}class="active"{% endif %}>Incidencias</a></li>
+            <li><a href="{% url 'incidencias' %}" {% if 'incidencia' in request.resolver_match.url_name %}class="active"{% endif %}>Incidencias y Bajas</a></li>
             <li><a href="{% url 'finca_list' %}" {% if 'finca' in request.resolver_match.url_name %}class="active"{% endif %}>Fincas y Recintos</a></li>
+            <li><a href="{% url 'explotacion_edit' %}" {% if request.resolver_match.url_name == 'explotacion_edit' %}class="active"{% endif %}>⚙️ Ajustes Explotación</a></li>
         </ul>
     </nav>
 
