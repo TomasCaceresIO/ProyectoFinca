@@ -25,12 +25,14 @@ COPY . /app/
 # Crear directorios para archivos estáticos y de media
 RUN mkdir -p /app/staticfiles /app/media
 
-# Crear usuario de sistema no-root por seguridad
-RUN addgroup --system appgroup && adduser --system --group appuser \
-    && chown -R appuser:appgroup /app
+# Crear usuario de sistema no-root por seguridad con home dir válido
+RUN useradd -m -d /home/appuser -s /bin/bash appuser && \
+    chown -R appuser:appuser /app /home/appuser
 
 # Otorgar permisos de ejecución al entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
+
+ENV HOME=/home/appuser
 
 # Cambiar a usuario no-root
 USER appuser
