@@ -23,7 +23,7 @@
                         <th>Tipo</th>
                         <th>Descripción</th>
                         <th>Fecha Registro</th>
-                        <th>Acción</th>
+                        <th>Acciones</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -46,15 +46,9 @@
                         <td>
                             <div class="d-flex gap-1">
                                 {% if inc.parto %}
-                                <a href="{% url 'parto_edit' pk=inc.parto.pk %}" class="btn btn-sm btn-outline">✏️ Rectificar Fecha</a>
+                                <a href="{% url 'parto_edit' pk=inc.parto.pk %}" class="btn btn-sm btn-primary">✏️ Modificar Fecha</a>
                                 {% endif %}
-                                <form hx-post="{% url 'incidencia_resolver' pk=inc.pk %}" 
-                                      hx-target="#incidencia-row-{{ inc.id }}" 
-                                      hx-swap="outerHTML" 
-                                      style="display: inline;">
-                                    {% csrf_token %}
-                                    <button type="submit" class="btn btn-sm btn-success">✅ Resolver</button>
-                                </form>
+                                <a href="{% url 'animal_detail' crotal=inc.animal.crotal %}" class="btn btn-sm btn-outline">👁️ Ver Ficha Madre</a>
                             </div>
                         </td>
                     </tr>

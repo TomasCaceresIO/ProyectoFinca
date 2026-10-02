@@ -219,7 +219,7 @@ class Animal(models.Model):
 
 class Parto(models.Model):
     """
-    Registro de parto de una hembra.
+    Registro de parto de una hembra (1 o 2 crías permitidas).
     """
     madre = models.ForeignKey(
         Animal,
@@ -236,7 +236,15 @@ class Parto(models.Model):
         blank=True,
         on_delete=models.SET_NULL,
         related_name='parto_origen',
-        verbose_name='Cría'
+        verbose_name='Cría 1'
+    )
+    cria2 = models.ForeignKey(
+        Animal,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name='parto_origen_segundo',
+        verbose_name='Cría 2 (Gemelar)'
     )
     alerta_intervalo = models.BooleanField(
         default=False,

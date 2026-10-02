@@ -46,6 +46,28 @@ class ExplotacionSetupForm(forms.Form):
     )
 
 
+class FincaForm(forms.Form):
+    """Formulario para dar de alta una nueva finca con sus recintos."""
+    nombre = forms.CharField(
+        max_length=200,
+        label='Nombre de la Finca',
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Ej: Finca El Robledo'
+        })
+    )
+    cebadero = forms.BooleanField(
+        required=False,
+        initial=True,
+        label='Crear recinto de Cebadero'
+    )
+    apartado = forms.BooleanField(
+        required=False,
+        initial=True,
+        label='Crear recinto de Apartado'
+    )
+
+
 class AnimalForm(forms.ModelForm):
     """Formulario para crear/editar un animal."""
     class Meta:
@@ -87,7 +109,6 @@ class AnimalForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Limitar madres solo a hembras
         self.fields['madre'].queryset = Animal.objects.filter(sexo='H')
 
     def clean_crotal(self):
@@ -121,33 +142,65 @@ class AnimalBajaForm(forms.Form):
 
 
 class PartoForm(forms.ModelForm):
-    """Formulario para registrar un parto."""
-    registrar_cria = forms.BooleanField(
-        required=False,
-        label='Dar de alta la cría ahora',
-    )
-    crotal_cria = forms.CharField(
+    """
+    Formulario para registrar un parto.
+    Exige obligatoriamente la Cría 1 (Mínimo 1 cría).
+    Si se marca 'es_gemelar', exige la Cría 2 (Máximo 2 crías).
+    """
+    # Cría 1 (Obligatoria)
+    crotal_cria_1 = forms.CharField(
         max_length=4,
-        required=False,
-        label='Crotal de la cría',
+        required=True,
+        label='Crotal Cría 1 *',
         widget=forms.TextInput(attrs={
             'class': 'form-control',
             'placeholder': '4 dígitos',
             'maxlength': '4',
         })
     )
-    sexo_cria = forms.ChoiceField(
-        choices=[('', '---------'), ('M', 'Macho'), ('H', 'Hembra')],
-        required=False,
-        label='Sexo de la cría',
+    sexo_cria_1 = forms.ChoiceField(
+        choices=[('M', 'Macho'), ('H', 'Hembra')],
+        required=True,
+        label='Sexo Cría 1 *',
         widget=forms.Select(attrs={'class': 'form-control'}),
     )
-    raza_cria = forms.CharField(
+    raza_cria_1 = forms.CharField(
         required=False,
         initial='CRUZADO',
-        label='Raza de la cría',
+        label='Raza Cría 1',
         widget=forms.TextInput(attrs={'class': 'form-control'}),
     )
+
+    # Gemelar (Opcional)
+    es_gemelar = forms.BooleanField(
+        required=False,
+        label='Parto gemelar (añadir 2ª cría)',
+    )
+
+    # Cría 2 (Obligatoria solo si es_gemelar=True)
+    crotal_cria_2 = forms.CharField(
+        max_length=4,
+        required=False,
+        label='Crotal Cría 2 (Gemelar)',
+        widget=forms.TextInput(attrs={
+            'class': 'form-control',
+            'placeholder': '4 dígitos',
+            'maxlength': '4',
+        })
+    )
+    sexo_cria_2 = forms.ChoiceField(
+        choices=[('', '---- Select ----'), ('M', 'Macho'), ('H', 'Hembra')],
+        required=False,
+        label='Sexo Cría 2',
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
+    raza_cria_2 = forms.CharField(
+        required=False,
+        initial='CRUZADO',
+        label='Raza Cría 2',
+        widget=forms.TextInput(attrs={'class': 'form-control'}),
+    )
+
     forzar_guardado = forms.BooleanField(
         required=False,
         widget=forms.HiddenInput(),
@@ -170,8 +223,28 @@ class PartoForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        # Limitar campo madre solo a hembras VIVAS
         self.fields['madre'].queryset = Animal.objects.filter(sexo='H', estado_vital='VIVO')
+
+    def clean(self):
+        cleaned_data = super().clean()
+        crotal1 = cleaned_data.get('crotal_cria_1')
+        sexo1 = cleaned_data.get('sexo_cria_1')
+        es_gemelar = cleaned_data.get('es_gemelar')
+        crotal2 = cleaned_data.get('crotal_cria_2')
+        sexo2 = cleaned_data.get('sexo_cria_2')
+
+        if not crotal1:
+            self.add_error('crotal_cria_1', 'El crotal de la Cría 1 es obligatorio.')
+
+        if es_gemelar:
+            if not crotal2:
+                self.add_error('crotal_cria_2', 'El crotal de la 2ª cría es obligatorio para partos gemelares.')
+            if not sexo2:
+                self.add_error('sexo_cria_2', 'El sexo de la 2ª cría es obligatorio para partos gemelares.')
+            if crotal1 and crotal2 and crotal1 == crotal2:
+                self.add_error('crotal_cria_2', 'Los crotales de las dos crías no pueden ser idénticos.')
+
+        return cleaned_data
 
 
 class PartoEditForm(forms.ModelForm):

@@ -127,34 +127,71 @@ def registrar_parto(
     fecha_parto: date,
     forzar: bool = False,
     observaciones: str = '',
+    crias: list = None,
     datos_cria: dict = None
 ) -> dict:
     """
-    Registra un parto en la base de datos.
+    Registra un parto en la base de datos (mínimo 1 y máximo 2 crías por parto).
     """
-    validacion = validar_intervalo_parto(madre, fecha_parto)
-    if not validacion['valido'] and not forzar:
-        raise ValidationError(validacion['mensaje'])
+    lista_crias = []
+    if crias is not None:
+        if isinstance(crias, list):
+            lista_crias = crias
+        elif isinstance(crias, dict):
+            lista_crias = [crias]
+    elif datos_cria is not None:
+        if isinstance(datos_cria, list):
+            lista_crias = datos_cria
+        elif isinstance(datos_cria, dict):
+            lista_crias = [datos_cria]
 
-    alerta_intervalo = validacion['alerta'] == 'ROJO'
+    # Regla: Mínimo 1 y Máximo 2 crías
+    if not (1 <= len(lista_crias) <= 2):
+        raise ValidationError("Un parto debe vincular obligatoriamente entre 1 y 2 crías (partos simples o gemelares).")
 
-    cria = None
-    if datos_cria and datos_cria.get('crotal'):
+    # Validar crotales de cada cría
+    crotales_vistos = set()
+    crias_creadas = []
+    
+    for c_data in lista_crias:
+        crotal = c_data.get('crotal')
+        if not crotal:
+            raise ValidationError("El crotal de cada cría es obligatorio.")
+        if crotal in crotales_vistos:
+            raise ValidationError(f"No se puede registrar el mismo crotal '{crotal}' dos veces en el mismo parto.")
+        crotales_vistos.add(crotal)
+
+        val_crotal = validar_crotal(crotal)
+        if val_crotal['bloqueante']:
+            raise ValidationError(val_crotal['mensaje'])
+
         cria = Animal.objects.create(
-            crotal=datos_cria['crotal'],
-            sexo=datos_cria.get('sexo', 'M'),
-            raza=datos_cria.get('raza', madre.raza),
+            crotal=crotal,
+            sexo=c_data.get('sexo', 'M'),
+            raza=c_data.get('raza', madre.raza),
             fecha_nacimiento=fecha_parto,
             estado_vital='VIVO',
             finca=madre.finca,
             sub_ubicacion=madre.sub_ubicacion,
             madre=madre,
         )
+        crias_creadas.append((cria, val_crotal))
+
+    # Validar intervalo biológico entre partos
+    validacion_intervalo = validar_intervalo_parto(madre, fecha_parto)
+    if not validacion_intervalo['valido'] and not forzar:
+        raise ValidationError(validacion_intervalo['mensaje'])
+
+    alerta_intervalo = validacion_intervalo['alerta'] == 'ROJO'
+
+    cria_1 = crias_creadas[0][0]
+    cria_2 = crias_creadas[1][0] if len(crias_creadas) > 1 else None
 
     parto = Parto.objects.create(
         madre=madre,
         fecha_parto=fecha_parto,
-        cria=cria,
+        cria=cria_1,
+        cria2=cria_2,
         alerta_intervalo=alerta_intervalo,
         observaciones=observaciones,
     )
@@ -165,17 +202,28 @@ def registrar_parto(
             animal=madre,
             tipo='ROJO',
             descripcion=(
-                f'Intervalo entre partos de {validacion["dias_intervalo"]} días '
+                f'Intervalo entre partos de {validacion_intervalo["dias_intervalo"]} días '
                 f'(mínimo: {INTERVALO_MINIMO_PARTOS} días).'
             ),
             parto=parto,
         )
 
+    for cria_obj, val_c in crias_creadas:
+        if val_c.get('alerta') == 'AMARILLO':
+            Incidencia.objects.create(
+                animal=cria_obj,
+                tipo='AMARILLO',
+                descripcion=f'Se reutilizó el crotal {cria_obj.crotal} previamente asignado a un animal en baja.',
+                parto=parto,
+            )
+
     return {
         'parto': parto,
-        'cria': cria,
+        'cria': cria_1,
+        'cria2': cria_2,
+        'crias': [c[0] for c in crias_creadas],
         'incidencia_creada': incidencia,
-        'alerta': validacion['alerta'],
+        'alerta': validacion_intervalo['alerta'],
     }
 
 
@@ -192,7 +240,6 @@ def actualizar_parto(parto: Parto, nueva_fecha_parto: date, observaciones: str =
     parto.alerta_intervalo = (validacion['alerta'] == 'ROJO')
     parto.save()
 
-    # Gestionar incidencia asociada
     incidencias = Incidencia.objects.filter(parto=parto)
     if parto.alerta_intervalo:
         if not incidencias.exists():
@@ -208,6 +255,7 @@ def actualizar_parto(parto: Parto, nueva_fecha_parto: date, observaciones: str =
                 descripcion=f'Intervalo entre partos: {validacion["dias_intervalo"]} días (mínimo: 270d).'
             )
     else:
+        # Si el intervalo recalculado pasa a ser >= 270d, se resuelve y desactiva la incidencia
         incidencias.update(resuelta=True)
 
     return parto

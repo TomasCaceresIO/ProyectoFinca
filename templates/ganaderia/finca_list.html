@@ -3,10 +3,13 @@
 {% block title %}Gestión de Fincas y Recintos - Gestión Ganadera{% endblock %}
 
 {% block content %}
-<div class="page-header">
+<div class="page-header d-flex justify-content-between align-items-center">
     <div>
         <h1 class="page-title">🏞️ Gestión de Fincas y Recintos</h1>
         <p class="page-subtitle">Desglose de ocupación por finca y sub-ubicación (Pasto, Cebadero, Apartado)</p>
+    </div>
+    <div>
+        <a href="{% url 'finca_create' %}" class="btn btn-primary">➕ Nueva Finca</a>
     </div>
 </div>
 
@@ -44,7 +47,7 @@
     {% empty %}
     <div class="card w-100">
         <div class="card-body text-center text-muted py-4">
-            No se han registrado fincas. Configura una finca desde el wizard de inicio.
+            No se han registrado fincas. Presiona el botón "+ Nueva Finca" para añadir una.
         </div>
     </div>
     {% endfor %}

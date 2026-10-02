@@ -21,10 +21,10 @@ urlpatterns = [
     
     # Fincas
     path('fincas/', views.finca_list, name='finca_list'),
+    path('fincas/nueva/', views.finca_create, name='finca_create'),
     
     # Incidencias
     path('incidencias/', views.incidencias, name='incidencias'),
-    path('incidencias/<int:pk>/resolver/', views.incidencia_resolver, name='incidencia_resolver'),
     
     # API endpoints
     path('api/validar-crotal/', views.api_validar_crotal, name='api_validar_crotal'),

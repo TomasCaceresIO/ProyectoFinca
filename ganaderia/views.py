@@ -4,12 +4,11 @@ Vistas de la aplicación Gestión Ganadera.
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponse
-from django.db.models import Max
 from django.utils import timezone
 
 from .models import Explotacion, Finca, Ubicacion, Animal, Parto, Incidencia
 from .forms import (
-    ExplotacionSetupForm, AnimalForm, AnimalBajaForm,
+    ExplotacionSetupForm, FincaForm, AnimalForm, AnimalBajaForm,
     PartoForm, PartoEditForm, TrasladoForm
 )
 from .services.animal_services import (
@@ -61,7 +60,6 @@ def home(request):
         'incidencias': Incidencia.objects.filter(resuelta=False).count(),
     }
     
-    # Filtros multifactor
     finca_id = request.GET.get('finca')
     recinto = request.GET.get('recinto')
     sexo = request.GET.get('sexo')
@@ -80,7 +78,6 @@ def home(request):
         
     lista_animales = list(animales)
     
-    # Ordenación
     if orden == 'dias_parto_desc':
         lista_animales.sort(
             key=lambda a: (a.dias_desde_ultimo_parto if a.dias_desde_ultimo_parto is not None else -1),
@@ -126,7 +123,7 @@ def animal_detail(request, crotal):
         Animal.objects.select_related('finca', 'madre'),
         crotal=crotal
     )
-    partos = animal.partos_como_madre.select_related('cria').order_by('-fecha_parto')
+    partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
     incidencias = animal.incidencias.all()
     
     return render(request, 'ganaderia/animal_detail.html', {
@@ -220,7 +217,7 @@ def animal_traslado(request, crotal):
 
 
 def parto_create(request):
-    """Registrar un nuevo parto."""
+    """Registrar un nuevo parto (1 o 2 crías obligatorias)."""
     madre_crotal = request.GET.get('madre')
     initial = {}
     if madre_crotal:
@@ -236,6 +233,21 @@ def parto_create(request):
         forzar = form.cleaned_data.get('forzar_guardado', False)
         observaciones = form.cleaned_data.get('observaciones', '')
         
+        crias = [
+            {
+                'crotal': form.cleaned_data['crotal_cria_1'],
+                'sexo': form.cleaned_data['sexo_cria_1'],
+                'raza': form.cleaned_data.get('raza_cria_1') or madre.raza,
+            }
+        ]
+
+        if form.cleaned_data.get('es_gemelar'):
+            crias.append({
+                'crotal': form.cleaned_data['crotal_cria_2'],
+                'sexo': form.cleaned_data['sexo_cria_2'],
+                'raza': form.cleaned_data.get('raza_cria_2') or madre.raza,
+            })
+
         validacion = validar_intervalo_parto(madre, fecha_parto)
         
         if not validacion['valido'] and not forzar:
@@ -244,22 +256,14 @@ def parto_create(request):
                 'alerta_intervalo': True,
                 'validacion': validacion,
             })
-        
-        datos_cria = None
-        if form.cleaned_data.get('registrar_cria') and form.cleaned_data.get('crotal_cria'):
-            datos_cria = {
-                'crotal': form.cleaned_data['crotal_cria'],
-                'sexo': form.cleaned_data.get('sexo_cria', 'M'),
-                'raza': form.cleaned_data.get('raza_cria', madre.raza),
-            }
-        
+
         try:
             resultado = registrar_parto(
                 madre=madre,
                 fecha_parto=fecha_parto,
                 forzar=forzar,
                 observaciones=observaciones,
-                datos_cria=datos_cria,
+                crias=crias,
             )
             
             if resultado['alerta'] == 'ROJO':
@@ -312,6 +316,31 @@ def finca_list(request):
     return render(request, 'ganaderia/finca_list.html', {'resumen_fincas': resumen_fincas})
 
 
+def finca_create(request):
+    """Crear una nueva finca con sus recintos."""
+    explotacion = Explotacion.objects.first()
+    if not explotacion:
+        return redirect('setup_wizard')
+        
+    form = FincaForm(request.POST or None)
+    if request.method == 'POST' and form.is_valid():
+        nombre = form.cleaned_data['nombre']
+        crear_cebadero = form.cleaned_data.get('cebadero', False)
+        crear_apartado = form.cleaned_data.get('apartado', False)
+        
+        finca = Finca.objects.create(explotacion=explotacion, nombre=nombre)
+        Ubicacion.objects.create(finca=finca, tipo_ubicacion='PASTO')
+        if crear_cebadero:
+            Ubicacion.objects.create(finca=finca, tipo_ubicacion='CEBADERO')
+        if crear_apartado:
+            Ubicacion.objects.create(finca=finca, tipo_ubicacion='APARTADO')
+            
+        messages.success(request, f'✅ Finca "{finca.nombre}" creada correctamente con sus recintos.')
+        return redirect('finca_list')
+        
+    return render(request, 'ganaderia/finca_form.html', {'form': form})
+
+
 def incidencias(request):
     """Registro de incidencias activas."""
     incidencias_activas = Incidencia.objects.filter(resuelta=False).select_related('animal', 'parto').order_by('-created_at')
@@ -321,18 +350,6 @@ def incidencias(request):
         'incidencias_activas': incidencias_activas,
         'incidencias_resueltas': incidencias_resueltas,
     })
-
-
-def incidencia_resolver(request, pk):
-    """Resolver incidencia."""
-    incidencia = get_object_or_404(Incidencia, pk=pk)
-    if request.method == 'POST':
-        incidencia.resuelta = True
-        incidencia.save()
-        messages.success(request, 'Incidencia marcada como resuelta.')
-        if request.headers.get('HX-Request'):
-            return HttpResponse('')
-    return redirect('incidencias')
 
 
 def api_validar_crotal(request):
