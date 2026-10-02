@@ -39,9 +39,14 @@
                 </div>
             </div>
 
-            <a href="{% url 'home' %}?finca={{ res.finca.id }}" class="btn btn-outline w-100">
-                🔍 Ver Animales de esta Finca
-            </a>
+            <div class="d-flex gap-2">
+                <a href="{% url 'home' %}?finca={{ res.finca.id }}" class="btn btn-outline w-100">
+                    🔍 Ver Animales
+                </a>
+                <a href="{% url 'finca_delete' pk=res.finca.id %}" class="btn btn-danger">
+                    🗑️ Eliminar Finca
+                </a>
+            </div>
         </div>
     </div>
     {% empty %}

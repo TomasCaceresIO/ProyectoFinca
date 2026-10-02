@@ -147,7 +147,9 @@ class Animal(models.Model):
     )
     finca = models.ForeignKey(
         Finca,
-        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
         related_name='animales',
         verbose_name='Finca'
     )
