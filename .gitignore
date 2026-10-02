@@ -37,8 +37,8 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
-# Static/Media files
-/static/
+# Collected Static & Media files
+/staticfiles/
 /media/
 
 # IDEs
@@ -60,10 +60,3 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 htmlcov/
-
-# Migrations (keep structure, ignore data)
-# Note: Keep migrations in version control for Django
-
-# Distribution
-*.egg
-*.whl

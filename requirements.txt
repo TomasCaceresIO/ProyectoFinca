@@ -1,19 +1,5 @@
-# ============================================================
-# requirements.txt - Dependencias del proyecto Gestión Ganadera
-# ============================================================
-# Para DESARROLLO LOCAL (SQLite): instalar este archivo completo.
-# Para PRODUCCIÓN (PostgreSQL): instalar además requirements-prod.txt
-#   pip install -r requirements.txt -r requirements-prod.txt
-
-# Core Django
-Django==5.1.1
-django-environ==0.11.2
-django-htmx==1.21.0
-
-# Development & Testing
-flake8==7.1.1
-pytest==8.3.3
-pytest-django==4.9.0
-
-# Utilities
-pillow==10.4.0
+Django>=5.0,<5.2
+django-environ>=0.11.2
+django-htmx>=1.21.0
+pytest>=8.0.0
+pytest-django>=4.9.0
