@@ -91,11 +91,6 @@ class Ubicacion(models.Model):
 class Animal(models.Model):
     """
     Animal registrado en la explotación.
-    
-    Reglas clave:
-    - crotal: CharField 4 dígitos numéricos estrictos ('0042')
-    - Unicidad activa: Solo 1 animal VIVO por crotal
-    - madre autorreferenciada (related_name='hijos')
     """
     SEXO_CHOICES = [
         ('M', 'Macho'),
@@ -205,7 +200,12 @@ class Animal(models.Model):
 
     @property
     def ultimo_parto(self):
-        """Último parto registrado de esta hembra."""
+        """Último parto registrado de esta hembra (optimizado para prefetch)."""
+        if hasattr(self, '_prefetched_objects_cache') and 'partos_como_madre' in self._prefetched_objects_cache:
+            partos = list(self.partos_como_madre.all())
+            if partos:
+                return max(partos, key=lambda p: p.fecha_parto)
+            return None
         return self.partos_como_madre.order_by('-fecha_parto').first()
 
     @property
