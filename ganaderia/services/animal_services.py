@@ -1,13 +1,12 @@
 """
 Servicios de lógica de negocio para animales y partos.
-Aísla las reglas de negocio de las vistas.
 """
-from datetime import date, timedelta
+from datetime import date
 from django.db import transaction
 from django.core.exceptions import ValidationError
-from ..models import Animal, Parto, Incidencia, Ubicacion
+from django.utils import timezone
+from ..models import Animal, Parto, Incidencia, Finca
 
-# Constante de negocio: intervalo mínimo entre partos (días)
 INTERVALO_MINIMO_PARTOS = 270
 
 
@@ -19,16 +18,7 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
     - RN-01: Debe ser exactamente 4 dígitos numéricos.
     - RN-02: No puede estar en uso por un animal VIVO.
     - RN-03: Si existe en BAJA, emite Alerta Amarilla (reutilización histórica).
-    
-    Returns:
-        dict con keys:
-        - 'valido': bool
-        - 'bloqueante': bool (si True, no se puede continuar)
-        - 'alerta': str|None ('AMARILLO' si hay reutilización histórica)
-        - 'mensaje': str con la descripción
-        - 'animal_baja': Animal|None (animal en baja con ese crotal, si existe)
     """
-    # RN-01: Formato
     if not crotal or not crotal.isdigit() or len(crotal) != 4:
         return {
             'valido': False,
@@ -38,13 +28,11 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
             'animal_baja': None,
         }
     
-    # Buscar animal VIVO con este crotal
     qs_vivo = Animal.objects.filter(crotal=crotal, estado_vital='VIVO')
     if excluir_pk:
         qs_vivo = qs_vivo.exclude(pk=excluir_pk)
     
     if qs_vivo.exists():
-        # RN-02: Crotal activo en uso
         return {
             'valido': False,
             'bloqueante': True,
@@ -53,12 +41,10 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
             'animal_baja': None,
         }
     
-    # Buscar animal en BAJA con este crotal
     qs_baja = Animal.objects.filter(crotal=crotal, estado_vital='BAJA')
     animal_baja = qs_baja.last()
     
     if animal_baja:
-        # RN-03: Alerta Amarilla - crotal histórico
         return {
             'valido': True,
             'bloqueante': False,
@@ -70,7 +56,6 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
             'animal_baja': animal_baja,
         }
     
-    # Crotal nuevo y disponible
     return {
         'valido': True,
         'bloqueante': False,
@@ -80,57 +65,59 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
     }
 
 
-def validar_intervalo_parto(madre: Animal, fecha_nuevo_parto: date) -> dict:
+def validar_intervalo_parto(madre: Animal, fecha_nuevo_parto: date, excluir_parto_id: int = None) -> dict:
     """
-    Valida el intervalo entre partos de una misma madre.
+    Valida el intervalo entre partos de una misma madre bidireccionalmente
+    (tanto con el parto anterior más cercano como con el posterior más cercano).
     
-    Regla RN-04: El intervalo mínimo biológico es de 270 días (~9 meses).
-    Si es menor, se genera Alerta Roja. El usuario puede forzar el guardado.
-    
-    Returns:
-        dict con keys:
-        - 'valido': bool (puede guardarse, pero con alerta si False)
-        - 'alerta': str|None ('ROJO' si intervalo < 270 días)
-        - 'dias_intervalo': int|None
-        - 'parto_anterior': Parto|None
-        - 'mensaje': str
+    Regla RN-04: Mínimo 270 días.
     """
-    partos_anteriores = Parto.objects.filter(
-        madre=madre
-    ).order_by('-fecha_parto')
-    
-    parto_anterior = partos_anteriores.first()
-    
-    if not parto_anterior:
-        return {
-            'valido': True,
-            'alerta': None,
-            'dias_intervalo': None,
-            'parto_anterior': None,
-            'mensaje': 'Primer parto de esta madre. Sin restricciones de intervalo.',
-        }
-    
-    dias_intervalo = (fecha_nuevo_parto - parto_anterior.fecha_parto).days
-    
-    if dias_intervalo < INTERVALO_MINIMO_PARTOS:
+    partos = Parto.objects.filter(madre=madre)
+    if excluir_parto_id:
+        partos = partos.exclude(pk=excluir_parto_id)
+
+    parto_anterior = partos.filter(fecha_parto__lte=fecha_nuevo_parto).order_by('-fecha_parto').first()
+    parto_posterior = partos.filter(fecha_parto__gte=fecha_nuevo_parto).order_by('fecha_parto').first()
+
+    alerta = False
+    dias_anterior = None
+    dias_posterior = None
+
+    if parto_anterior:
+        dias_anterior = (fecha_nuevo_parto - parto_anterior.fecha_parto).days
+        if dias_anterior < INTERVALO_MINIMO_PARTOS:
+            alerta = True
+
+    if parto_posterior:
+        dias_posterior = (parto_posterior.fecha_parto - fecha_nuevo_parto).days
+        if dias_posterior < INTERVALO_MINIMO_PARTOS:
+            alerta = True
+
+    if alerta:
+        dias_conflicto = dias_anterior if (dias_anterior is not None and dias_anterior < 270) else dias_posterior
         return {
             'valido': False,
             'alerta': 'ROJO',
-            'dias_intervalo': dias_intervalo,
+            'dias_intervalo': dias_conflicto,
+            'dias_anterior': dias_anterior,
+            'dias_posterior': dias_posterior,
             'parto_anterior': parto_anterior,
+            'parto_posterior': parto_posterior,
             'mensaje': (
-                f'RN-04: Intervalo entre partos de {dias_intervalo} días, '
-                f'inferior al mínimo reglamentario de {INTERVALO_MINIMO_PARTOS} días (~9 meses). '
-                f'Conflicto con normativa Diputación. ¿Desea forzar el guardado?'
+                f'RN-04: Intervalo entre partos inferior al mínimo reglamentario de 270 días (~9 meses). '
+                f'Conflicto detectado.'
             ),
         }
-    
+
     return {
         'valido': True,
         'alerta': None,
-        'dias_intervalo': dias_intervalo,
+        'dias_intervalo': dias_anterior,
+        'dias_anterior': dias_anterior,
+        'dias_posterior': dias_posterior,
         'parto_anterior': parto_anterior,
-        'mensaje': f'Intervalo correcto: {dias_intervalo} días desde el parto anterior.',
+        'parto_posterior': parto_posterior,
+        'mensaje': 'Intervalo correcto.',
     }
 
 
@@ -144,36 +131,26 @@ def registrar_parto(
 ) -> dict:
     """
     Registra un parto en la base de datos.
-    
-    Si datos_cria no es None, también crea el animal cría.
-    Si hay alerta de intervalo y forzar=True, guarda con alerta_intervalo=True.
-    
-    Returns:
-        dict con 'parto', 'cria', 'incidencia_creada', 'alerta'
     """
-    # Validar intervalo
     validacion = validar_intervalo_parto(madre, fecha_parto)
-    
     if not validacion['valido'] and not forzar:
         raise ValidationError(validacion['mensaje'])
-    
+
     alerta_intervalo = validacion['alerta'] == 'ROJO'
-    
-    # Crear animal cría si se proporcionan datos
+
     cria = None
-    if datos_cria:
+    if datos_cria and datos_cria.get('crotal'):
         cria = Animal.objects.create(
             crotal=datos_cria['crotal'],
-            sexo=datos_cria['sexo'],
+            sexo=datos_cria.get('sexo', 'M'),
             raza=datos_cria.get('raza', madre.raza),
             fecha_nacimiento=fecha_parto,
             estado_vital='VIVO',
-            finca_actual=madre.finca_actual,
+            finca=madre.finca,
             sub_ubicacion=madre.sub_ubicacion,
             madre=madre,
         )
-    
-    # Crear el parto
+
     parto = Parto.objects.create(
         madre=madre,
         fecha_parto=fecha_parto,
@@ -181,8 +158,7 @@ def registrar_parto(
         alerta_intervalo=alerta_intervalo,
         observaciones=observaciones,
     )
-    
-    # Crear incidencia si hay alerta roja
+
     incidencia = None
     if alerta_intervalo:
         incidencia = Incidencia.objects.create(
@@ -190,12 +166,11 @@ def registrar_parto(
             tipo='ROJO',
             descripcion=(
                 f'Intervalo entre partos de {validacion["dias_intervalo"]} días '
-                f'(mínimo: {INTERVALO_MINIMO_PARTOS} días). '
-                f'Parto anterior: {validacion["parto_anterior"].fecha_parto}.'
+                f'(mínimo: {INTERVALO_MINIMO_PARTOS} días).'
             ),
             parto=parto,
         )
-    
+
     return {
         'parto': parto,
         'cria': cria,
@@ -205,35 +180,53 @@ def registrar_parto(
 
 
 @transaction.atomic
-def trasladar_animal(animal: Animal, nueva_finca, nueva_ubicacion: Ubicacion) -> Animal:
+def actualizar_parto(parto: Parto, nueva_fecha_parto: date, observaciones: str = None) -> Parto:
     """
-    Traslada un animal a una nueva finca/ubicación.
-    
-    Lógica según diagrama de secuencia 001:
-    - Si nueva_ubicacion.tipo == 'CEBADERO':
-        asigna fecha_entrada_cebadero = hoy
-    - Si nueva_ubicacion.tipo in ('PASTO', 'APARTADO'):
-        limpia fecha_entrada_cebadero = None
-    
-    Emite advertencia (no bloqueante) si se traslada una reproductora al cebadero.
+    Modifica la fecha de un parto existente y recalcula sus alertas de intervalo.
     """
-    # Advertencia RN-05: hembra reproductora al cebadero
-    es_reproductora_al_cebadero = (
-        animal.sexo == 'H' and
-        animal.es_reproductora and
-        nueva_ubicacion.tipo == 'CEBADERO'
-    )
+    validacion = validar_intervalo_parto(parto.madre, nueva_fecha_parto, excluir_parto_id=parto.pk)
+    parto.fecha_parto = nueva_fecha_parto
+    if observaciones is not None:
+        parto.observaciones = observaciones
     
-    animal.finca_actual = nueva_finca
-    animal.sub_ubicacion = nueva_ubicacion
-    
-    if nueva_ubicacion.tipo == 'CEBADERO':
-        animal.fecha_entrada_cebadero = date.today()
+    parto.alerta_intervalo = (validacion['alerta'] == 'ROJO')
+    parto.save()
+
+    # Gestionar incidencia asociada
+    incidencias = Incidencia.objects.filter(parto=parto)
+    if parto.alerta_intervalo:
+        if not incidencias.exists():
+            Incidencia.objects.create(
+                animal=parto.madre,
+                tipo='ROJO',
+                descripcion=f'Intervalo de parto recalculado (< {INTERVALO_MINIMO_PARTOS} días).',
+                parto=parto,
+            )
+        else:
+            incidencias.update(
+                resuelta=False,
+                descripcion=f'Intervalo entre partos: {validacion["dias_intervalo"]} días (mínimo: 270d).'
+            )
+    else:
+        incidencias.update(resuelta=True)
+
+    return parto
+
+
+@transaction.atomic
+def trasladar_animal(animal: Animal, nueva_finca: Finca, nueva_sub_ubicacion: str) -> Animal:
+    """
+    Traslada un animal a una nueva finca/sub_ubicación.
+    - Cebadero: sella fecha_entrada_cebadero = hoy
+    - Pasto / Apartado: fecha_entrada_cebadero = None
+    """
+    animal.finca = nueva_finca
+    animal.sub_ubicacion = nueva_sub_ubicacion
+    if nueva_sub_ubicacion == 'CEBADERO':
+        animal.fecha_entrada_cebadero = timezone.now().date()
     else:
         animal.fecha_entrada_cebadero = None
-    
     animal.save()
-    
     return animal
 
 
@@ -241,10 +234,10 @@ def trasladar_animal(animal: Animal, nueva_finca, nueva_ubicacion: Ubicacion) ->
 def dar_de_baja_animal(animal: Animal, motivo: str = '') -> Animal:
     """
     Da de baja un animal (estado_vital = 'BAJA').
-    Las bajas son directas, sin papelera de 7 días.
+    Sus partos e hijos permanecen intactos.
     """
     animal.estado_vital = 'BAJA'
-    animal.fecha_baja = date.today()
+    animal.fecha_baja = timezone.now().date()
     animal.motivo_baja = motivo
     animal.save()
     return animal
