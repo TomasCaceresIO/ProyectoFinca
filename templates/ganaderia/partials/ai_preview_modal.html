@@ -98,7 +98,7 @@
 
         <div class="modal-footer" style="padding: 1rem 1.5rem; background-color: #f8fafc; border-top: 1px solid var(--color-border); display: flex; gap: 0.75rem;">
             {% if puede_confirmar %}
-            <form id="ai-confirm-form" method="post" action="{% url 'asistente_ejecutar' %}" style="display: flex; gap: 0.75rem; width: 100%; margin: 0;">
+            <form id="ai-confirm-form" method="post" action="{% url 'asistente_ejecutar' %}" style="display: flex; gap: 0.75rem; width: 100%; margin: 0;" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '⏳ Guardando...'; }">
                 {% csrf_token %}
                 <input type="hidden" name="crotal_madre" value="{{ crotal_madre }}">
                 <input type="hidden" name="fecha_parto" value="{{ fecha_parto_str }}">

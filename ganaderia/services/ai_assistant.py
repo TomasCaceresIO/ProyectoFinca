@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import date, timedelta
 from typing import Optional, Literal
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from django.conf import settings
 from django.utils import timezone
 from pydantic import BaseModel, Field
@@ -15,6 +16,84 @@ except ImportError:
     types = None
 
 logger = logging.getLogger(__name__)
+
+
+PALABRAS_DIGITOS = {
+    'cero': '0', 'uno': '1', 'un': '1', 'una': '1', 'dos': '2', 'tres': '3',
+    'cuatro': '4', 'cinco': '5', 'seis': '6', 'siete': '7', 'ocho': '8', 'nueve': '9',
+}
+
+PALABRAS_COMPUESTAS = {
+    'diez': 10, 'once': 11, 'doce': 12, 'trece': 13, 'catorce': 14, 'quince': 15,
+    'dieciseis': 16, 'dieciséis': 16, 'diecisiete': 17, 'dieciocho': 18, 'diecinueve': 19,
+    'veinte': 20, 'veintiuno': 21, 'veintidos': 22, 'veintidós': 22, 'veintitres': 23,
+    'veintitrés': 23, 'veinticuatro': 24, 'veinticinco': 25, 'veintiseis': 26,
+    'veintiséis': 26, 'veintisiete': 27, 'veintiocho': 28, 'veintinueve': 29,
+    'treinta': 30, 'cuarenta': 40, 'cincuenta': 50, 'sesenta': 60,
+    'setenta': 70, 'ochenta': 80, 'noventa': 90, 'cien': 100, 'ciento': 100,
+}
+
+
+def normalizar_crotal(valor: Optional[str]) -> Optional[str]:
+    """
+    Normaliza un crotal detectado por voz o texto:
+    - Convierte palabras numéricas en español (ej. 'tres' -> '0003', 'cero cero tres' -> '0003',
+      'treinta' -> '0030', 'cuarenta y dos' -> '0042', '5' -> '0005', '42' -> '0042').
+    - Rellena con ceros a la izquierda hasta 4 dígitos (.zfill(4)).
+    - Retorna una cadena de 4 dígitos o None si no es procesable.
+    """
+    if valor is None:
+        return None
+
+    val_str = str(valor).strip().lower()
+    if not val_str:
+        return None
+
+    # Si ya son dígitos puros
+    if val_str.isdigit():
+        if len(val_str) <= 4:
+            return val_str.zfill(4)
+        return val_str
+
+    # Quitar posibles prefijos como '#', 'nº', 'número', 'crotal'
+    val_str = re.sub(r'^(?:#|n[ºo]|número|crotal)\s*', '', val_str).strip()
+
+    if val_str.isdigit():
+        if len(val_str) <= 4:
+            return val_str.zfill(4)
+        return val_str
+
+    tokens = val_str.replace('-', ' ').split()
+
+    # Caso A: Secuencia de dígitos individuales hablados (ej. "cero cero cero tres", "cero cuatro dos")
+    if all(t in PALABRAS_DIGITOS for t in tokens):
+        cadena_digitos = "".join(PALABRAS_DIGITOS[t] for t in tokens)
+        return cadena_digitos.zfill(4)
+
+    # Caso B: Número compuesto (ej. "cuarenta y dos", "treinta y cinco", "veintitrés", "quince")
+    total = 0
+    i = 0
+    es_compuesto = True
+    while i < len(tokens):
+        t = tokens[i]
+        if t == 'y':
+            i += 1
+            continue
+        if t in PALABRAS_COMPUESTAS:
+            total += PALABRAS_COMPUESTAS[t]
+        elif t in PALABRAS_DIGITOS:
+            total += int(PALABRAS_DIGITOS[t])
+        elif t.isdigit():
+            total += int(t)
+        else:
+            es_compuesto = False
+            break
+        i += 1
+
+    if es_compuesto and total > 0:
+        return str(total).zfill(4)
+
+    return None
 
 
 class ComandoPartoOutput(BaseModel):
@@ -179,47 +258,62 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
     crotal_madre = None
     cria_crotal = None
 
-    # Intentar capturar por contexto sintáctico explícito
-    m_madre = re.search(r'(?:vaca|madre|la|el|hembra)\s*(?:#|n[ºo]|número)?\s*(\d{4})\b', texto, re.IGNORECASE)
-    m_cria = re.search(r'(?:terner[ao]|becerr[ao]|cría|cria|hijo|hija|crotal)\s*(?:#|n[ºo]|número)?\s*(\d{4})\b', texto, re.IGNORECASE)
+    # Intentar capturar por contexto sintáctico explícito (dígitos o palabras)
+    # Patrones para crotales que pueden ser números o palabras habladas
+    m_madre = re.search(r'(?:vaca|madre|la|el|hembra)\s*(?:#|n[ºo]|número)?\s*([a-záéíóú0-9\s]+?)(?=\s+(?:pari[oó]|tuvo|dio|con|y|el|en|a|de|\d{4}|$))', texto, re.IGNORECASE)
+    m_cria = re.search(r'(?:terner[ao]|becerr[ao]|cría|cria|hijo|hija|crotal)\s*(?:#|n[ºo]|número)?\s*([a-záéíóú0-9\s]+?)(?=\s+(?:con|en|el|de|del|raza|nacid[ao]|$))', texto, re.IGNORECASE)
 
-    if m_madre:
-        crotal_madre = m_madre.group(1)
+    # 1. Probar captura directa de 4 dígitos clásica
+    m_madre_num = re.search(r'(?:vaca|madre|la|el|hembra)\s*(?:#|n[ºo]|número)?\s*(\d{1,4})\b', texto, re.IGNORECASE)
+    m_cria_num = re.search(r'(?:terner[ao]|becerr[ao]|cría|cria|hijo|hija|crotal)\s*(?:#|n[ºo]|número)?\s*(\d{1,4})\b', texto, re.IGNORECASE)
 
-    if m_cria:
-        cria_crotal = m_cria.group(1)
+    if m_madre_num:
+        crotal_madre = normalizar_crotal(m_madre_num.group(1))
+    elif m_madre:
+        c_norm = normalizar_crotal(m_madre.group(1))
+        if c_norm:
+            crotal_madre = c_norm
 
-    # Extraer todos los números de 4 dígitos
-    todos_4d = [n for n in re.findall(r'\b\d{4}\b', texto)]
-    # Filtrar aquellos que sean años de fecha detectados, SALVO que estuvieran explícitamente precedidos de 'crotal'
+    if m_cria_num:
+        cria_crotal = normalizar_crotal(m_cria_num.group(1))
+    elif m_cria:
+        c_norm = normalizar_crotal(m_cria.group(1))
+        if c_norm:
+            cria_crotal = c_norm
+
+    # Extraer todos los números de 1 a 4 dígitos
+    todos_nums = [n for n in re.findall(r'\b\d{1,4}\b', texto)]
     crotales_candidatos = []
-    for num in todos_4d:
-        # Comprobar si num está precedido directamente por "crotal"
+    for num in todos_nums:
+        # Evitar números de 1 o 2 dígitos que pertenezcan a la fecha
         idx = texto.find(num)
         es_crotal_explicito = False
         if idx != -1:
             segmento_previo = texto[max(0, idx - 15):idx].lower()
             if "crotal" in segmento_previo:
                 es_crotal_explicito = True
-        if num in anios_fecha and not es_crotal_explicito:
+        if len(num) == 4 and num in anios_fecha and not es_crotal_explicito:
             continue
-        crotales_candidatos.append(num)
+        # Si tiene 1 o 2 dígitos y forma parte de una fecha textual (ej. "el 10 de octubre"), ignorar si coincide con el día o mes
+        if len(num) <= 2:
+            sub_post = texto_lower[idx:min(len(texto_lower), idx + 20)]
+            if any(f"de {mes}" in sub_post for mes in MESES_ESP.keys()):
+                continue
+        # Normalizar a 4 dígitos
+        norm = normalizar_crotal(num)
+        if norm:
+            crotales_candidatos.append(norm)
 
     # Si se capturó cria_crotal sintácticamente pero no crotal_madre:
     # no podemos reusar cria_crotal como crotal_madre
     candidatos_restantes = [c for c in crotales_candidatos if c != cria_crotal and c != crotal_madre]
 
     if not crotal_madre:
-        if m_madre:
-            crotal_madre = m_madre.group(1)
-        elif len(candidatos_restantes) >= 1 and not cria_crotal:
-            # Solo si no hay sintaxis explícita, se toma el primero como madre
+        if len(candidatos_restantes) >= 1 and not cria_crotal:
             crotal_madre = candidatos_restantes.pop(0)
 
     if not cria_crotal:
-        if m_cria:
-            cria_crotal = m_cria.group(1)
-        elif len(candidatos_restantes) >= 1:
+        if len(candidatos_restantes) >= 1:
             cria_crotal = candidatos_restantes.pop(0)
 
     return {
@@ -254,8 +348,10 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
         f"Tu cometido es extraer con exactitud los datos para registrar un parto de vaca y su cría. "
         f"Reglas estrictas de extracción:\n"
         f"- crotal_madre: Crotal obligatorio de exactamente 4 dígitos de la vaca madre (ej. '3014', '0001'). "
+        f"Si se dice en palabras (ej. 'tres', 'cero cero tres') normalízalo a 4 dígitos con ceros a la izquierda (ej. '0003'). "
         f"Si no se especifica de forma explícita en el mensaje o falta, DEBES devolver null.\n"
         f"- cria_crotal: Crotal obligatorio de exactamente 4 dígitos asignado a la cría nacida (ej. '5012', '0003'). "
+        f"Si se dice en palabras (ej. 'cuarenta y dos') normalízalo a 4 dígitos (ej. '0042'). "
         f"PROHIBIDO TERMINANTEMENTE asignar números de año (ej. 19xx, 20xx, como 2022, 2024, etc.) como cria_crotal, "
         f"a menos que el usuario diga explícitamente 'con crotal 2022'. Si no se indica explícitamente un crotal para la cría, "
         f"DEBES devolver null.\n"
@@ -290,24 +386,57 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
         )
     )
 
-    return json.loads(response.text)
+    res_dict = json.loads(response.text)
+    if res_dict.get('crotal_madre'):
+        res_dict['crotal_madre'] = normalizar_crotal(res_dict['crotal_madre'])
+    if res_dict.get('cria_crotal'):
+        res_dict['cria_crotal'] = normalizar_crotal(res_dict['cria_crotal'])
+    return res_dict
 
 
 def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm', fincas_disponibles: list = None) -> dict:
     """
     Punto de entrada principal para el procesamiento de comandos de parto (texto o audio).
-    Utiliza Gemini 2.5 Flash si GEMINI_API_KEY está presente, o conmuta a modo simulado/fallback con regex.
+    Utiliza Gemini 2.5 Flash si GEMINI_API_KEY está presente, con un timeout estricto de 8 segundos.
+    Si se agota el tiempo de espera o falla la conexión, conmuta silenciosamente al modo fallback sin error 500.
     """
     api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
     
     if api_key.strip():
         try:
-            return _llamar_gemini(texto_o_audio, audio_content_type, fincas_disponibles=fincas_disponibles)
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(_llamar_gemini, texto_o_audio, audio_content_type, fincas_disponibles)
+                return future.result(timeout=8.0)
+        except FuturesTimeoutError:
+            logger.warning("Timeout (8s) al invocar Gemini API. Conmutando a fallback regex.")
+            if isinstance(texto_o_audio, str):
+                return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
+            return {
+                "intencion": "REGISTRAR_PARTO",
+                "crotal_madre": None,
+                "fecha_parto": timezone.now().date().strftime('%Y-%m-%d'),
+                "cria_crotal": None,
+                "cria_sexo": "H",
+                "cria_raza": "Retinta",
+                "cria_recinto": "PASTO",
+                "cria_finca": None,
+                "error": "El servicio de IA ha tardado demasiado en responder. Inténtelo de nuevo o use la entrada de texto."
+            }
         except Exception as e:
             logger.warning(f"Error al invocar Gemini API ({e}). Usando fallback regex.")
             if isinstance(texto_o_audio, str):
                 return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
-            raise e
+            return {
+                "intencion": "REGISTRAR_PARTO",
+                "crotal_madre": None,
+                "fecha_parto": timezone.now().date().strftime('%Y-%m-%d'),
+                "cria_crotal": None,
+                "cria_sexo": "H",
+                "cria_raza": "Retinta",
+                "cria_recinto": "PASTO",
+                "cria_finca": None,
+                "error": f"Error al comunicar con Gemini: {str(e)}"
+            }
 
     # Modo Simulado / Fallback sin API key
     if isinstance(texto_o_audio, str):

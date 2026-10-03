@@ -49,7 +49,7 @@
     <div class="card-body">
         <form id="formulario-filtros" 
               hx-get="{% url 'home' %}" 
-              hx-target="#animal-grid-tbody" 
+              hx-target="#animal-grid-container" 
               hx-trigger="change, keyup delay:300ms"
               class="grid-4 gap-2 mb-3">
             <div>
@@ -88,25 +88,8 @@
             </div>
         </form>
 
-        <div class="table-responsive">
-            <table class="table">
-                <thead>
-                    <tr>
-                        <th>Crotal</th>
-                        <th>Sexo</th>
-                        <th>Raza</th>
-                        <th>Edad</th>
-                        <th>Finca</th>
-                        <th>Recinto</th>
-                        <th>Entrada Cebadero</th>
-                        <th>Último Parto</th>
-                        <th>Acciones</th>
-                    </tr>
-                </thead>
-                <tbody id="animal-grid-tbody">
-                    {% include 'ganaderia/partials/animal_grid_tbody.html' %}
-                </tbody>
-            </table>
+        <div id="animal-grid-container">
+            {% include 'ganaderia/partials/animal_grid_tbody.html' %}
         </div>
     </div>
 </div>

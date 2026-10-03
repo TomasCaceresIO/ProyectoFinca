@@ -10,6 +10,7 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.urls import reverse
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponse, Http404
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
@@ -139,13 +140,19 @@ def home(request):
     orden = request.GET.get('orden', 'crotal')
     
     lista_animales = get_filtered_animales(request)
+    paginator = Paginator(lista_animales, 25)
+    page_number = request.GET.get('page', 1)
+    page_obj = paginator.get_page(page_number)
+    
     fincas = Finca.objects.all()
     incidencias_recientes = Incidencia.objects.filter(resuelta=False).select_related('animal')[:5]
     
     context = {
         'explotacion': explotacion,
         'stats': stats,
-        'animales': lista_animales,
+        'animales': page_obj.object_list,
+        'page_obj': page_obj,
+        'paginator': paginator,
         'fincas': fincas,
         'incidencias_recientes': incidencias_recientes,
         'filtros': {

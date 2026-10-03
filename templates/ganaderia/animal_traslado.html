@@ -16,7 +16,7 @@
             </div>
             {% endif %}
 
-            <form method="post">
+            <form method="post" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '🔄 Trasladando...'; }">
                 {% csrf_token %}
                 {% if advertencia_reproductora %}
                 <input type="hidden" name="confirmar_reproductora" value="1">

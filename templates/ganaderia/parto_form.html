@@ -23,7 +23,7 @@
             </div>
             {% endif %}
 
-            <form method="post">
+            <form method="post" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '🐣 Guardando...'; }">
                 {% csrf_token %}
                 {% if alerta_intervalo %}
                 <input type="hidden" name="forzar_guardado" value="1">

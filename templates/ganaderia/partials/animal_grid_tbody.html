@@ -1,61 +1,123 @@
-{% for animal in animales %}
-<tr>
-    <td>
-        <a href="{% url 'animal_detail' crotal=animal.crotal %}" class="font-weight-bold" style="text-decoration: underline;">
-            <strong>{{ animal.crotal }}</strong>
-        </a>
-    </td>
-    <td>
-        {% if animal.sexo == 'H' %}
-        <span class="badge badge-info">♀ Hembra</span>
+<div class="table-responsive">
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Crotal</th>
+                <th>Sexo</th>
+                <th>Raza</th>
+                <th>Edad</th>
+                <th>Finca</th>
+                <th>Recinto</th>
+                <th>Entrada Cebadero</th>
+                <th>Último Parto</th>
+                <th>Acciones</th>
+            </tr>
+        </thead>
+        <tbody id="animal-grid-tbody">
+            {% for animal in animales %}
+            <tr>
+                <td>
+                    <a href="{% url 'animal_detail' crotal=animal.crotal %}" class="font-weight-bold" style="text-decoration: underline;">
+                        <strong>{{ animal.crotal }}</strong>
+                    </a>
+                </td>
+                <td>
+                    {% if animal.sexo == 'H' %}
+                    <span class="badge badge-info">♀ Hembra</span>
+                    {% else %}
+                    <span class="badge badge-secondary">♂ Macho</span>
+                    {% endif %}
+                </td>
+                <td>{{ animal.raza }}</td>
+                <td>{{ animal.edad_dias }} días</td>
+                <td>{{ animal.finca.nombre }}</td>
+                <td>
+                    {% if animal.sub_ubicacion == 'CEBADERO' %}
+                    <span class="badge badge-warning">🌾 Cebadero</span>
+                    {% elif animal.sub_ubicacion == 'APARTADO' %}
+                    <span class="badge badge-secondary">🧱 Apartado</span>
+                    {% else %}
+                    <span class="badge badge-success">🌱 Pasto</span>
+                    {% endif %}
+                </td>
+                <td>
+                    {% if animal.fecha_entrada_cebadero %}
+                    <small>{{ animal.fecha_entrada_cebadero|date:"d/m/Y" }}</small>
+                    {% else %}
+                    -
+                    {% endif %}
+                </td>
+                <td>
+                    {% if animal.sexo == 'H' %}
+                        {% if animal.ultimo_parto %}
+                            {{ animal.ultimo_parto.fecha_parto|date:"d/m/Y" }}
+                            <br>
+                            <small class="text-muted">({{ animal.dias_desde_ultimo_parto }} d)</small>
+                        {% else %}
+                            <small class="text-muted">Sin partos</small>
+                        {% endif %}
+                    {% else %}
+                        <small class="text-muted">N/A</small>
+                    {% endif %}
+                </td>
+                <td>
+                    <div class="d-flex gap-1">
+                        <a href="{% url 'animal_detail' crotal=animal.crotal %}" class="btn btn-sm btn-outline">👁️ Ver</a>
+                        <a href="{% url 'animal_traslado' crotal=animal.crotal %}" class="btn btn-sm btn-outline">🔄 Trasladar</a>
+                        <a href="{% url 'animal_baja' crotal=animal.crotal %}" class="btn btn-sm btn-danger">❌ Baja</a>
+                    </div>
+                </td>
+            </tr>
+            {% empty %}
+            <tr>
+                <td colspan="9" class="text-center text-muted py-3">
+                    No se encontraron animales con los filtros seleccionados.
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+{% if page_obj and page_obj.paginator.num_pages > 1 %}
+<div class="d-flex justify-content-between align-items-center mt-3 pt-3" style="border-top: 1px solid var(--color-border); font-size: 0.9rem;">
+    <div>
+        <span class="text-muted">
+            Mostrando {{ page_obj.start_index }}-{{ page_obj.end_index }} de {{ page_obj.paginator.count }} animales
+        </span>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        {% if page_obj.has_previous %}
+        <button type="button"
+                class="btn btn-sm btn-outline"
+                hx-get="{% url 'home' %}?page={{ page_obj.previous_page_number }}"
+                hx-include="#formulario-filtros"
+                hx-target="#animal-grid-container">
+            ⬅️ Anterior
+        </button>
         {% else %}
-        <span class="badge badge-secondary">♂ Macho</span>
+        <button type="button" class="btn btn-sm btn-outline" disabled style="opacity: 0.5; cursor: not-allowed;">
+            ⬅️ Anterior
+        </button>
         {% endif %}
-    </td>
-    <td>{{ animal.raza }}</td>
-    <td>{{ animal.edad_dias }} días</td>
-    <td>{{ animal.finca.nombre }}</td>
-    <td>
-        {% if animal.sub_ubicacion == 'CEBADERO' %}
-        <span class="badge badge-warning">🌾 Cebadero</span>
-        {% elif animal.sub_ubicacion == 'APARTADO' %}
-        <span class="badge badge-secondary">🧱 Apartado</span>
+
+        <span class="font-weight-bold" style="padding: 0 0.5rem;">
+            Página {{ page_obj.number }} de {{ page_obj.paginator.num_pages }}
+        </span>
+
+        {% if page_obj.has_next %}
+        <button type="button"
+                class="btn btn-sm btn-outline"
+                hx-get="{% url 'home' %}?page={{ page_obj.next_page_number }}"
+                hx-include="#formulario-filtros"
+                hx-target="#animal-grid-container">
+            Siguiente ➡️
+        </button>
         {% else %}
-        <span class="badge badge-success">🌱 Pasto</span>
+        <button type="button" class="btn btn-sm btn-outline" disabled style="opacity: 0.5; cursor: not-allowed;">
+            Siguiente ➡️
+        </button>
         {% endif %}
-    </td>
-    <td>
-        {% if animal.fecha_entrada_cebadero %}
-        <small>{{ animal.fecha_entrada_cebadero|date:"d/m/Y" }}</small>
-        {% else %}
-        -
-        {% endif %}
-    </td>
-    <td>
-        {% if animal.sexo == 'H' %}
-            {% if animal.ultimo_parto %}
-                {{ animal.ultimo_parto.fecha_parto|date:"d/m/Y" }}
-                <br>
-                <small class="text-muted">({{ animal.dias_desde_ultimo_parto }} d)</small>
-            {% else %}
-                <small class="text-muted">Sin partos</small>
-            {% endif %}
-        {% else %}
-            <small class="text-muted">N/A</small>
-        {% endif %}
-    </td>
-    <td>
-        <div class="d-flex gap-1">
-            <a href="{% url 'animal_detail' crotal=animal.crotal %}" class="btn btn-sm btn-outline">👁️ Ver</a>
-            <a href="{% url 'animal_traslado' crotal=animal.crotal %}" class="btn btn-sm btn-outline">🔄 Trasladar</a>
-            <a href="{% url 'animal_baja' crotal=animal.crotal %}" class="btn btn-sm btn-danger">❌ Baja</a>
-        </div>
-    </td>
-</tr>
-{% empty %}
-<tr>
-    <td colspan="9" class="text-center text-muted py-3">
-        No se encontraron animales con los filtros seleccionados.
-    </td>
-</tr>
-{% endfor %}
+    </div>
+</div>
+{% endif %}

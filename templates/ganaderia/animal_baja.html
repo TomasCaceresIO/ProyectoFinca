@@ -12,7 +12,7 @@
             <p><strong>Atención:</strong> Vas a dar de baja al animal <strong>{{ animal.crotal }}</strong> ({{ animal.get_sexo_display }} · {{ animal.raza }}). El animal pasará al estado BAJA inmediatamente.</p>
             <p class="text-muted"><small>Sus descendientes y partos pasados se mantendrán registrados e intactos en el historial.</small></p>
 
-            <form method="post">
+            <form method="post" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '❌ Procesando...'; }">
                 {% csrf_token %}
                 <div class="form-group mb-3">
                     <label class="form-label" for="id_motivo">Motivo de Baja (opcional)</label>

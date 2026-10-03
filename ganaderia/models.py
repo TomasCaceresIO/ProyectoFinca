@@ -196,7 +196,7 @@ class Animal(models.Model):
             models.UniqueConstraint(
                 fields=['crotal'],
                 condition=models.Q(estado_vital='VIVO'),
-                name='unique_crotal_vivo'
+                name='unique_active_crotal_per_farm'
             )
         ]
 

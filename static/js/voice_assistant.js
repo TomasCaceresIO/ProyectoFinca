@@ -42,8 +42,9 @@ document.addEventListener('DOMContentLoaded', () => {
     async function enviarComando(data) {
         btnSubmit.disabled = true;
         btnMic.disabled = true;
+        aiInput.disabled = true;
         const originalText = btnSubmit.innerHTML;
-        btnSubmit.innerHTML = '⏳ Analizando...';
+        btnSubmit.innerHTML = '⏳ Analizando orden...';
 
         const token = getCsrfToken();
         if (data instanceof FormData && token && !data.has('csrfmiddlewaretoken')) {
@@ -92,6 +93,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } finally {
             btnSubmit.disabled = false;
             btnMic.disabled = false;
+            aiInput.disabled = false;
             btnSubmit.innerHTML = originalText;
         }
     }
@@ -115,6 +117,20 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // --- VERIFICACIÓN DE CONTEXTO SEGURO (HTTPS / localhost) ---
+    const esContextoSeguro = window.isSecureContext || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+    const tieneSoporteVoz = Boolean(window.SpeechRecognition || window.webkitSpeechRecognition || (navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+
+    if (!esContextoSeguro && !tieneSoporteVoz) {
+        btnMic.style.opacity = '0.5';
+        btnMic.title = 'La entrada por voz requiere conexión segura (HTTPS o localhost); utilice la entrada de texto';
+        btnMic.addEventListener('click', (e) => {
+            e.preventDefault();
+            alert('La entrada por voz requiere conexión segura (HTTPS o localhost); utilice la entrada de texto.');
+        });
+        return;
+    }
+
     // --- RECONOCIMIENTO DE VOZ NATIVO ---
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
@@ -125,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let audioChunks = [];
     let isRecordingMedia = false;
 
-    if (SpeechRecognition) {
+    if (SpeechRecognition && esContextoSeguro) {
         recognition = new SpeechRecognition();
         recognition.lang = 'es-ES';
         recognition.continuous = false;
@@ -172,7 +188,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-    } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    } else if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia && esContextoSeguro) {
         // Fallback a captura de audio nativa con MediaRecorder
         btnMic.addEventListener('click', async () => {
             if (isRecordingMedia && mediaRecorder) {
@@ -218,6 +234,11 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
     } else {
-        btnMic.style.display = 'none';
+        btnMic.style.opacity = '0.5';
+        btnMic.title = 'La entrada por voz requiere conexión segura (HTTPS o localhost); utilice la entrada de texto';
+        btnMic.addEventListener('click', (e) => {
+            e.preventDefault();
+            alert('La entrada por voz requiere conexión segura (HTTPS o localhost); utilice la entrada de texto.');
+        });
     }
 });

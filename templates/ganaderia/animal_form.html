@@ -9,7 +9,7 @@
             <h2>➕ Registrar Nuevo Animal</h2>
         </div>
         <div class="card-body">
-            <form method="post">
+            <form method="post" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '💾 Guardando...'; }">
                 {% csrf_token %}
 
                 <div class="form-group mb-2">
