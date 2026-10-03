@@ -75,6 +75,24 @@ def validar_intervalo_parto(madre: Animal, fecha_nuevo_parto: date, excluir_part
     if excluir_parto_id:
         partos = partos.exclude(pk=excluir_parto_id)
 
+    # Evaluar partos en la misma fecha (límite biológico: máximo 2 crías / gemelos)
+    partos_mismo_dia = partos.filter(fecha_parto=fecha_nuevo_parto)
+    # Si ya hay 2 o más partos en esa misma fecha exacta, un tercer parto es inadmisible y dispara Alerta Roja
+    if partos_mismo_dia.count() >= 2:
+        return {
+            'valido': False,
+            'alerta': 'ROJO',
+            'dias_intervalo': 0,
+            'dias_anterior': 0,
+            'dias_posterior': 0,
+            'parto_anterior': partos_mismo_dia.first(),
+            'parto_posterior': None,
+            'mensaje': (
+                f'RN-04: Límite de partos múltiples excedido. La madre ya cuenta con {partos_mismo_dia.count()} '
+                f'partos registrados en esta misma fecha ({fecha_nuevo_parto.strftime("%d/%m/%Y")}). Máximo admitido: 2 (parto gemelar).'
+            ),
+        }
+
     # Evaluar únicamente contra partos con fechas estrictamente distintas (anteriores o posteriores)
     parto_anterior = partos.filter(fecha_parto__lt=fecha_nuevo_parto).order_by('-fecha_parto').first()
     parto_posterior = partos.filter(fecha_parto__gt=fecha_nuevo_parto).order_by('fecha_parto').first()
@@ -201,13 +219,15 @@ def registrar_parto(
 
     incidencia = None
     if alerta_intervalo:
+        desc = (
+            validacion_intervalo['mensaje']
+            if validacion_intervalo.get('dias_intervalo') == 0
+            else f'Intervalo entre partos de {validacion_intervalo["dias_intervalo"]} días (mínimo: {INTERVALO_MINIMO_PARTOS} días).'
+        )
         incidencia = Incidencia.objects.create(
             animal=madre,
             tipo='ROJO',
-            descripcion=(
-                f'Intervalo entre partos de {validacion_intervalo["dias_intervalo"]} días '
-                f'(mínimo: {INTERVALO_MINIMO_PARTOS} días).'
-            ),
+            descripcion=desc,
             parto=parto,
         )
 

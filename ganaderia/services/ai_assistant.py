@@ -48,6 +48,14 @@ class ComandoPartoOutput(BaseModel):
     )
 
 
+MESES_ESP = {
+    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+    'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+    'septiembre': 9, 'setiembre': 9, 'octubre': 10,
+    'noviembre': 11, 'diciembre': 12
+}
+
+
 def _extraer_comando_parto_regex(texto: str) -> dict:
     """
     Parser simulado / fallback basado en reglas y expresiones regulares
@@ -57,7 +65,7 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
     hoy = timezone.now().date()
     
     # 1. Determinar fecha
-    fecha_parto = hoy
+    fecha_parto = None
     if "anteayer" in texto_lower:
         fecha_parto = hoy - timedelta(days=2)
     elif "ayer" in texto_lower:
@@ -66,26 +74,46 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
         fecha_parto = hoy + timedelta(days=2)
     elif "mañana" in texto_lower or "manana" in texto_lower:
         fecha_parto = hoy + timedelta(days=1)
-    elif "hoy" in texto_lower:
+    elif "hoy" in texto_lower or "ha nacido hoy" in texto_lower or "nacio hoy" in texto_lower or "nació hoy" in texto_lower:
         fecha_parto = hoy
     else:
+        # Buscar formato textual en español: "10 de octubre de 2022" o "10 de octubre del 2022" o "el 10 de octubre 2022"
+        m_texto_fecha = re.search(
+            r'\b(\d{1,2})\s+de\s+([a-záéíóú]+)(?:\s+(?:de|del))?\s+(\d{4})\b',
+            texto_lower
+        )
+        if m_texto_fecha:
+            d_str, mes_nombre, y_str = m_texto_fecha.groups()
+            mes_num = MESES_ESP.get(mes_nombre)
+            if mes_num:
+                try:
+                    fecha_parto = date(int(y_str), mes_num, int(d_str))
+                except ValueError:
+                    pass
+
         # Buscar formato DD/MM/YYYY o DD-MM-YYYY
-        m_fecha = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', texto)
-        if m_fecha:
-            d, m, y = map(int, m_fecha.groups())
-            try:
-                fecha_parto = date(y, m, d)
-            except ValueError:
-                fecha_parto = hoy
-        else:
-            # Buscar formato YYYY-MM-DD
+        if not fecha_parto:
+            m_fecha = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', texto)
+            if m_fecha:
+                d, m, y = map(int, m_fecha.groups())
+                try:
+                    fecha_parto = date(y, m, d)
+                except ValueError:
+                    pass
+
+        # Buscar formato YYYY-MM-DD
+        if not fecha_parto:
             m_iso = re.search(r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b', texto)
             if m_iso:
                 y, m, d = map(int, m_iso.groups())
                 try:
                     fecha_parto = date(y, m, d)
                 except ValueError:
-                    fecha_parto = hoy
+                    pass
+
+    # Si no se detectó ninguna fecha temporal explícita ni relativa, se asume hoy por defecto
+    if not fecha_parto:
+        fecha_parto = hoy
 
     # 2. Determinar sexo de la cría
     sexo = "H"
@@ -95,22 +123,26 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
         sexo = "H"
 
     # 3. Determinar raza
-    razas_comunes = {
-        "limusin": "Limusina",
-        "limusina": "Limusina",
-        "retinta": "Retinta",
-        "charol": "Charolais",
-        "charolais": "Charolais",
-        "charolesa": "Charolais",
-        "avileña": "Avileña-Negra Ibérica",
-        "avilena": "Avileña-Negra Ibérica",
-        "morucha": "Morucha",
-        "angus": "Aberdeen Angus",
-        "rubia gallega": "Rubia Gallega",
-        "berrenda": "Berrenda en Colorado",
-    }
+    razas_comunes = [
+        ("limusina", "Limusina"),
+        ("limosina", "Limusina"),
+        ("limusin", "Limusina"),
+        ("limosin", "Limusina"),
+        ("charolais", "Charolais"),
+        ("charolesa", "Charolais"),
+        ("charol", "Charolais"),
+        ("avileña", "Avileña-Negra Ibérica"),
+        ("avilena", "Avileña-Negra Ibérica"),
+        ("retinta", "Retinta"),
+        ("morucha", "Morucha"),
+        ("aberdeen angus", "Aberdeen Angus"),
+        ("angus", "Aberdeen Angus"),
+        ("rubia gallega", "Rubia Gallega"),
+        ("berrenda en colorado", "Berrenda en Colorado"),
+        ("berrenda", "Berrenda en Colorado"),
+    ]
     raza = "Retinta"
-    for k, v in razas_comunes.items():
+    for k, v in razas_comunes:
         if k in texto_lower:
             raza = v
             break
@@ -118,29 +150,62 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
     # 4. Determinar recinto
     recinto = "CEBADERO" if "cebadero" in texto_lower else "PASTO"
 
-    # 5. Extraer crotales (números de 4 dígitos)
-    crotales_4d = re.findall(r'\b\d{4}\b', texto)
+    # 5. Extraer crotales de forma estricta evitando números de año
+    # Identificar si un número de 4 dígitos forma parte de una fecha o año
+    # Detectamos años de 4 dígitos (19xx o 20xx) en contextos temporales como "de 2022", "en 2022", "/2022", "-2022"
+    anios_fecha = set()
+    for m in re.finditer(r'(?:de|del|en|[/-]|\b)\s*(\d{4})\b', texto_lower):
+        posible_anio = m.group(1)
+        sub_ant = texto_lower[max(0, m.start() - 25):m.start()]
+        if any(mes in sub_ant for mes in MESES_ESP.keys()) or any(p in sub_ant for p in ["año", "ano", "del", "de", "en", "el"]):
+            if posible_anio.startswith(('19', '20')):
+                anios_fecha.add(posible_anio)
+
     crotal_madre = None
     cria_crotal = None
 
-    # Intentar capturar por contexto sintáctico
-    m_madre = re.search(r'(?:vaca|madre|la)\s*(?:#|n[ºo]|número)?\s*(\d{4})\b', texto, re.IGNORECASE)
+    # Intentar capturar por contexto sintáctico explícito
+    m_madre = re.search(r'(?:vaca|madre|la|el|hembra)\s*(?:#|n[ºo]|número)?\s*(\d{4})\b', texto, re.IGNORECASE)
     m_cria = re.search(r'(?:terner[ao]|becerr[ao]|cría|cria|hijo|hija|crotal)\s*(?:#|n[ºo]|número)?\s*(\d{4})\b', texto, re.IGNORECASE)
 
     if m_madre:
         crotal_madre = m_madre.group(1)
+
     if m_cria:
         cria_crotal = m_cria.group(1)
 
-    # Si no se capturaron por palabras clave, usar el orden de aparición
-    if not crotal_madre and len(crotales_4d) >= 1:
-        crotal_madre = crotales_4d[0]
-    if not cria_crotal and len(crotales_4d) >= 2:
-        # Tomar el segundo crotal distinto
-        for c in crotales_4d:
-            if c != crotal_madre:
-                cria_crotal = c
-                break
+    # Extraer todos los números de 4 dígitos
+    todos_4d = [n for n in re.findall(r'\b\d{4}\b', texto)]
+    # Filtrar aquellos que sean años de fecha detectados, SALVO que estuvieran explícitamente precedidos de 'crotal'
+    crotales_candidatos = []
+    for num in todos_4d:
+        # Comprobar si num está precedido directamente por "crotal"
+        idx = texto.find(num)
+        es_crotal_explicito = False
+        if idx != -1:
+            segmento_previo = texto[max(0, idx - 15):idx].lower()
+            if "crotal" in segmento_previo:
+                es_crotal_explicito = True
+        if num in anios_fecha and not es_crotal_explicito:
+            continue
+        crotales_candidatos.append(num)
+
+    # Si se capturó cria_crotal sintácticamente pero no crotal_madre:
+    # no podemos reusar cria_crotal como crotal_madre
+    candidatos_restantes = [c for c in crotales_candidatos if c != cria_crotal and c != crotal_madre]
+
+    if not crotal_madre:
+        if m_madre:
+            crotal_madre = m_madre.group(1)
+        elif len(candidatos_restantes) >= 1 and not cria_crotal:
+            # Solo si no hay sintaxis explícita, se toma el primero como madre
+            crotal_madre = candidatos_restantes.pop(0)
+
+    if not cria_crotal:
+        if m_cria:
+            cria_crotal = m_cria.group(1)
+        elif len(candidatos_restantes) >= 1:
+            cria_crotal = candidatos_restantes.pop(0)
 
     return {
         "intencion": "REGISTRAR_PARTO",
@@ -169,10 +234,16 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm') -> dic
         f"Eres el Asistente de Inteligencia Artificial de un sistema de gestión ganadera bovina. "
         f"La fecha de hoy de referencia es {hoy_iso} ({hoy_es}). "
         f"Tu cometido es extraer con exactitud los datos para registrar un parto de vaca y su cría. "
-        f"Reglas de extracción:\n"
-        f"- crotal_madre: crotal de 4 dígitos de la vaca madre (ej. '3014').\n"
-        f"- fecha_parto: fecha en formato YYYY-MM-DD. Si se indica 'hoy', usa {hoy_iso}. Si se indica 'ayer', usa la fecha de ayer.\n"
-        f"- cria_crotal: crotal de 4 dígitos asignado a la cría nacida (ej. '5012').\n"
+        f"Reglas estrictas de extracción:\n"
+        f"- crotal_madre: Crotal obligatorio de exactamente 4 dígitos de la vaca madre (ej. '3014', '0001'). "
+        f"Si no se especifica de forma explícita en el mensaje o falta, DEBES devolver null.\n"
+        f"- cria_crotal: Crotal obligatorio de exactamente 4 dígitos asignado a la cría nacida (ej. '5012', '0003'). "
+        f"PROHIBIDO TERMINANTEMENTE asignar números de año (ej. 19xx, 20xx, como 2022, 2024, etc.) como cria_crotal, "
+        f"a menos que el usuario diga explícitamente 'con crotal 2022'. Si no se indica explícitamente un crotal para la cría, "
+        f"DEBES devolver null.\n"
+        f"- fecha_parto: Fecha del parto en formato YYYY-MM-DD. Si el usuario indica una fecha explícita pasada o histórica "
+        f"(ej. '10 de octubre de 2022', '10/10/2022'), DEBES respetarla y parsearla fielmente (ej. '2022-10-10'). "
+        f"Solo debes usar la fecha de hoy ({hoy_iso}) si el usuario dice 'hoy', 'ha nacido hoy', o no aporta ninguna indicación temporal.\n"
         f"- cria_sexo: 'H' para hembra/ternera/becerra, 'M' para macho/ternero/becerro.\n"
         f"- cria_raza: raza de la cría (ej. 'Limusina', 'Retinta', 'Charolais'). Si no se menciona, usa la más probable o 'Retinta'.\n"
         f"- cria_recinto: 'PASTO' o 'CEBADERO' (por defecto 'PASTO').\n"

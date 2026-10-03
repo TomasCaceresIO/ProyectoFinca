@@ -53,6 +53,38 @@ class AIAssistantTestCase(TestCase):
         ayer = timezone.now().date() - timedelta(days=1)
         self.assertEqual(resultado_macho["fecha_parto"], ayer.strftime("%Y-%m-%d"))
 
+    def test_extraccion_frase_fecha_pasada_explicita(self):
+        """Test con frase con fecha pasada explícita: respeta fecha exacta y no confunde año con crotal."""
+        texto = "La hembra 0001 parió una ternera limosina con crotal 0003 el día 10 de octubre de 2022"
+        resultado = _extraer_comando_parto_regex(texto)
+        self.assertEqual(resultado["crotal_madre"], "0001")
+        self.assertEqual(resultado["cria_crotal"], "0003")
+        self.assertEqual(resultado["fecha_parto"], "2022-10-10")
+        self.assertEqual(resultado["cria_sexo"], "H")
+        self.assertEqual(resultado["cria_raza"], "Limusina")
+
+    def test_preview_sin_crotal_madre_devuelve_error_bloqueante(self):
+        """Test sin crotal de madre: debe devolver error bloqueante sin tarjeta de previsualización/confirmación."""
+        url_preview = reverse('asistente_preview')
+        response = self.client.post(url_preview, {
+            'texto': 'Parió una ternera con crotal 0003 hoy'
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No se especificó el crotal de la madre (debe ser un número de 4 dígitos)")
+        self.assertFalse(response.context['puede_confirmar'])
+        self.assertNotContains(response, "Confirmar y Guardar")
+
+    def test_preview_sin_crotal_cria_devuelve_error_bloqueante(self):
+        """Test sin crotal de cría: no debe tomar el año como crotal y debe devolver error bloqueante."""
+        url_preview = reverse('asistente_preview')
+        response = self.client.post(url_preview, {
+            'texto': 'La hembra 3014 parió una ternera limosina el 10 de octubre de 2022'
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "No se especificó el crotal de la cría (4 dígitos requeridos)")
+        self.assertFalse(response.context['puede_confirmar'])
+        self.assertNotContains(response, "Confirmar y Guardar")
+
     @override_settings(GEMINI_API_KEY="test-fake-key")
     @patch("ganaderia.services.ai_assistant.genai.Client")
     def test_extraccion_mock_gemini_llm(self, mock_client_class):

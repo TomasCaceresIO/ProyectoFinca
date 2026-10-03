@@ -704,8 +704,8 @@ def asistente_preview(request):
     fecha_parto = None
 
     # 1. Validar madre en censo activo
-    if not crotal_madre:
-        errores_bloqueantes.append("No se ha podido identificar el crotal de la madre en el comando.")
+    if not crotal_madre or len(str(crotal_madre)) != 4 or not str(crotal_madre).isdigit():
+        errores_bloqueantes.append("No se especificó el crotal de la madre (debe ser un número de 4 dígitos)")
     else:
         madre = Animal.objects.filter(crotal=crotal_madre, estado_vital='VIVO', sexo='H').first()
         if not madre:
@@ -757,24 +757,27 @@ def asistente_preview(request):
 
     # 3. Validar crotal de la cría
     if not cria_crotal:
-        errores_bloqueantes.append("No se ha podido identificar el crotal de la cría en el comando.")
-    elif len(cria_crotal) != 4 or not cria_crotal.isdigit():
-        errores_bloqueantes.append(f"El crotal de la cría ('{cria_crotal}') debe contener exactamente 4 dígitos numéricos.")
+        errores_bloqueantes.append("No se especificó el crotal de la cría (4 dígitos requeridos)")
+    elif len(str(cria_crotal)) != 4 or not str(cria_crotal).isdigit():
+        errores_bloqueantes.append("No se especificó el crotal de la cría (4 dígitos requeridos)")
     else:
         val_crotal = validar_crotal(cria_crotal)
         if val_crotal['bloqueante']:
             errores_bloqueantes.append(val_crotal['mensaje'])
 
-    # 4. Validar intervalo reproductivo (RN-04: Mínimo 270 días)
+    # 4. Validar intervalo reproductivo (RN-04: Mínimo 270 días / límite partos gemelares)
     if madre and fecha_parto and not errores_bloqueantes:
         val_intervalo = validar_intervalo_parto(madre, fecha_parto)
         if not val_intervalo['valido']:
             alerta_roja = True
             dias_intervalo = val_intervalo.get('dias_intervalo', '?')
-            mensaje_rojo = (
-                f"⚠️ CONFLICTO NORMATIVO (Diputación): El intervalo con el parto anterior es de {dias_intervalo} días "
-                f"(< 9 meses / 270 días). El registro provocará una Alerta Roja oficial."
-            )
+            if dias_intervalo == 0:
+                mensaje_rojo = f"⚠️ CONFLICTO NORMATIVO: {val_intervalo['mensaje']} El registro provocará una Alerta Roja oficial."
+            else:
+                mensaje_rojo = (
+                    f"⚠️ CONFLICTO NORMATIVO (Diputación): El intervalo con el parto anterior es de {dias_intervalo} días "
+                    f"(< 9 meses / 270 días). El registro provocará una Alerta Roja oficial."
+                )
 
     return render(request, 'ganaderia/partials/ai_preview_modal.html', {
         'datos': datos,
