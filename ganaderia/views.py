@@ -25,7 +25,7 @@ from .services.animal_services import (
     validar_crotal, validar_intervalo_parto,
     registrar_parto, actualizar_parto, trasladar_animal, dar_de_baja_animal
 )
-from .services.ai_assistant import procesar_comando_parto
+from .services.ai_assistant import procesar_comando_parto, procesar_importacion_lote
 
 
 def get_filtered_animales(request, with_annotations=False):
@@ -936,4 +936,197 @@ def asistente_ejecutar(request):
             response['HX-Redirect'] = reverse('home')
             return response
         return redirect('home')
+
+
+@csrf_exempt
+def asistente_lote_preview(request):
+    """
+    Procesa un documento PDF oficial o un texto/dictado largo de importación de lote de animales.
+    Evalúa cada animal (crotales duplicados, fundadores, formato) y renderiza el modal interactivo de confirmación.
+    """
+    if request.method != 'POST':
+        return HttpResponse("Método no permitido", status=405)
+
+    texto = request.POST.get('texto', '').strip()
+    archivo = request.FILES.get('archivo') or request.FILES.get('pdf')
+
+    if not texto and not archivo:
+        return render(request, 'ganaderia/partials/ai_lote_preview_modal.html', {
+            'error_general': "Por favor, proporciona un archivo PDF de censo o un texto/dictado describiendo el lote de animales."
+        })
+
+    fincas_explotacion = Finca.objects.prefetch_related('ubicaciones').all()
+    nombres_fincas = [f.nombre for f in fincas_explotacion]
+
+    try:
+        if archivo:
+            bytes_data = archivo.read()
+            mime_type = archivo.content_type if hasattr(archivo, 'content_type') and archivo.content_type else 'application/pdf'
+            datos = procesar_importacion_lote(archivo_bytes=bytes_data, mime_type=mime_type, fincas_disponibles=nombres_fincas)
+        else:
+            datos = procesar_importacion_lote(texto=texto, fincas_disponibles=nombres_fincas)
+    except Exception as e:
+        return render(request, 'ganaderia/partials/ai_lote_preview_modal.html', {
+            'error_general': f"Error al procesar la importación masiva: {str(e)}"
+        })
+
+    if datos.get('error'):
+        return render(request, 'ganaderia/partials/ai_lote_preview_modal.html', {
+            'error_general': datos['error'],
+            'datos': datos,
+        })
+
+    animales_extraidos = datos.get('animales', [])
+    finca_detectada_nombre = datos.get('finca_nombre')
+
+    # Finca por defecto
+    finca_destino = None
+    if finca_detectada_nombre:
+        finca_destino = fincas_explotacion.filter(nombre__iexact=finca_detectada_nombre).first()
+        if not finca_destino:
+            finca_destino = fincas_explotacion.filter(nombre__icontains=finca_detectada_nombre).first()
+    if not finca_destino:
+        finca_destino = fincas_explotacion.first()
+
+    # Evaluar individualmente cada animal
+    animales_evaluados = []
+    crotales_vivos_existentes = set(Animal.objects.filter(estado_vital='VIVO').values_list('crotal', flat=True))
+    total_hembras = 0
+    total_machos = 0
+    crotales_en_lote = set()
+
+    for idx, item in enumerate(animales_extraidos):
+        crotal = item.get('crotal')
+        sexo = item.get('sexo', 'H').upper()
+        if sexo not in ['H', 'M']:
+            sexo = 'H'
+        raza = item.get('raza') or 'Limusina'
+        fecha_nac = item.get('fecha_nacimiento')
+        crotal_madre = item.get('crotal_madre')
+        sub_ubicacion = item.get('sub_ubicacion') or 'PASTO'
+
+        error = None
+        es_valido = True
+
+        if not crotal or len(str(crotal)) != 4 or not str(crotal).isdigit():
+            error = "Crotal inválido (debe contener 4 dígitos)"
+            es_valido = False
+        elif crotal in crotales_vivos_existentes:
+            error = "Crotal duplicado en censo activo"
+            es_valido = False
+        elif crotal in crotales_en_lote:
+            error = "Crotal repetido dentro del mismo lote"
+            es_valido = False
+        else:
+            crotales_en_lote.add(crotal)
+
+        if es_valido:
+            if sexo == 'H':
+                total_hembras += 1
+            else:
+                total_machos += 1
+
+        animales_evaluados.append({
+            'index': idx,
+            'crotal': crotal,
+            'sexo': sexo,
+            'raza': raza,
+            'fecha_nacimiento': fecha_nac,
+            'crotal_madre': crotal_madre,
+            'sub_ubicacion': sub_ubicacion,
+            'es_valido': es_valido,
+            'error': error,
+            'seleccionado': es_valido,
+        })
+
+    return render(request, 'ganaderia/partials/ai_lote_preview_modal.html', {
+        'animales': animales_evaluados,
+        'finca_destino': finca_destino,
+        'fincas_explotacion': fincas_explotacion,
+        'total_animales': len(animales_evaluados),
+        'total_validos': total_hembras + total_machos,
+        'total_hembras': total_hembras,
+        'total_machos': total_machos,
+    })
+
+
+@csrf_exempt
+def asistente_lote_ejecutar(request):
+    """
+    Ejecuta atómicamente la importación en lote de animales confirmados desde el modal de IA.
+    Soporta animales fundadores (sin madre) y sella fecha de entrada a cebadero si aplica.
+    """
+    if request.method != 'POST':
+        return HttpResponse("Método no permitido", status=405)
+
+    finca_id = request.POST.get('finca_id')
+    finca_obj = get_object_or_404(Finca, pk=finca_id) if finca_id else Finca.objects.first()
+
+    recinto_global = request.POST.get('recinto_global') or 'PASTO'
+    seleccionados = request.POST.getlist('seleccionados')
+
+    if not seleccionados:
+        messages.warning(request, "No se seleccionó ningún animal para importar.")
+        return redirect('home')
+
+    hoy = timezone.now().date()
+    animales_creados = 0
+
+    try:
+        with transaction.atomic():
+            for idx_str in seleccionados:
+                crotal = request.POST.get(f'crotal_{idx_str}')
+                sexo = request.POST.get(f'sexo_{idx_str}', 'H')
+                raza = request.POST.get(f'raza_{idx_str}', 'Limusina')
+                fecha_nac_str = request.POST.get(f'fecha_nacimiento_{idx_str}')
+                crotal_madre = request.POST.get(f'crotal_madre_{idx_str}')
+
+                # Resolver fecha de nacimiento
+                fecha_nac = None
+                if fecha_nac_str:
+                    try:
+                        if '-' in fecha_nac_str:
+                            y, m, d = map(int, fecha_nac_str.split('-')[:3])
+                            fecha_nac = date(y, m, d)
+                        elif '/' in fecha_nac_str:
+                            d, m, y = map(int, fecha_nac_str.split('/')[:3])
+                            fecha_nac = date(y, m, d)
+                    except Exception:
+                        pass
+                if not fecha_nac:
+                    fecha_nac = hoy
+
+                # Madre opcional (fundador si es None)
+                madre = None
+                if crotal_madre and str(crotal_madre).strip():
+                    madre = Animal.objects.filter(crotal=str(crotal_madre).strip(), estado_vital='VIVO', sexo='H').first()
+
+                fecha_cebadero = hoy if recinto_global == 'CEBADERO' else None
+
+                Animal.objects.create(
+                    crotal=crotal,
+                    sexo=sexo,
+                    raza=raza,
+                    fecha_nacimiento=fecha_nac,
+                    estado_vital='VIVO',
+                    finca=finca_obj,
+                    sub_ubicacion=recinto_global,
+                    fecha_entrada_cebadero=fecha_cebadero,
+                    madre=madre,
+                )
+                animales_creados += 1
+
+        messages.success(
+            request,
+            f"✅ Se han importado y registrado correctamente {animales_creados} animales en el censo de la finca '{finca_obj.nombre}'."
+        )
+    except Exception as e:
+        messages.error(request, f"Error al ejecutar la importación en lote: {str(e)}")
+
+    if request.headers.get('HX-Request'):
+        response = HttpResponse(status=200)
+        response['HX-Redirect'] = reverse('home')
+        return response
+    return redirect('home')
+
 

@@ -2,7 +2,7 @@ import re
 import json
 import logging
 from datetime import date, timedelta
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from django.conf import settings
 from django.utils import timezone
@@ -16,6 +16,56 @@ except ImportError:
     types = None
 
 logger = logging.getLogger(__name__)
+
+
+class AnimalImportItem(BaseModel):
+    crotal: str = Field(description="Crotal obligatorio de 4 dígitos numéricos (ej. '4001', '0015').")
+    sexo: str = Field(default="H", description="Sexo del animal: 'H' (hembra) o 'M' (macho).")
+    raza: Optional[str] = Field(default="Limusina", description="Raza del animal (ej. Limusina, Retinta, Charolesa, etc.).")
+    fecha_nacimiento: Optional[str] = Field(default=None, description="Fecha de nacimiento en formato YYYY-MM-DD o null si no se conoce.")
+    crotal_madre: Optional[str] = Field(default=None, description="Crotal de 4 dígitos de la madre o null si no se conoce / es fundador.")
+    sub_ubicacion: Optional[str] = Field(default="PASTO", description="Recinto: 'PASTO', 'CEBADERO' o 'APARTADO'.")
+
+
+class LoteImportOutput(BaseModel):
+    intencion: str = Field(default="IMPORTAR_LOTE", description="Intención del comando.")
+    finca_nombre: Optional[str] = Field(default=None, description="Nombre de la finca indicada en el lote o documento, o null.")
+    animales: List[AnimalImportItem] = Field(default_factory=list, description="Lista de animales a importar.")
+
+
+class ComandoPartoOutput(BaseModel):
+    intencion: Literal["REGISTRAR_PARTO", "DESCONOCIDO"] = Field(
+        default="REGISTRAR_PARTO",
+        description="Intención identificada del usuario. 'REGISTRAR_PARTO' si describe un parto o cría nacida."
+    )
+    crotal_madre: Optional[str] = Field(
+        default=None,
+        description="Código o crotal de 4 dígitos de la vaca madre (ej. '3014')."
+    )
+    fecha_parto: Optional[str] = Field(
+        default=None,
+        description="Fecha del parto en formato YYYY-MM-DD. Resolver fechas relativas como hoy o ayer."
+    )
+    cria_crotal: Optional[str] = Field(
+        default=None,
+        description="Código o crotal de 4 dígitos de la cría nacida (ej. '5012')."
+    )
+    cria_sexo: Optional[Literal["M", "H"]] = Field(
+        default="H",
+        description="Sexo de la cría: 'M' para macho/ternero, 'H' para hembra/ternera."
+    )
+    cria_raza: Optional[str] = Field(
+        default="Retinta",
+        description="Raza de la cría (ej. Limusina, Retinta, Charolais, Avileña)."
+    )
+    cria_recinto: Optional[str] = Field(
+        default="PASTO",
+        description="Recinto asignado a la cría: 'PASTO' o 'CEBADERO'."
+    )
+    cria_finca: Optional[str] = Field(
+        default=None,
+        description="Nombre de la finca de la explotación donde se ubicará la cría (ej. 'Finca Montealto'). Null si no se indica."
+    )
 
 
 PALABRAS_DIGITOS = {
@@ -94,41 +144,6 @@ def normalizar_crotal(valor: Optional[str]) -> Optional[str]:
         return str(total).zfill(4)
 
     return None
-
-
-class ComandoPartoOutput(BaseModel):
-    intencion: Literal["REGISTRAR_PARTO", "DESCONOCIDO"] = Field(
-        default="REGISTRAR_PARTO",
-        description="Intención identificada del usuario. 'REGISTRAR_PARTO' si describe un parto o cría nacida."
-    )
-    crotal_madre: Optional[str] = Field(
-        default=None,
-        description="Código o crotal de 4 dígitos de la vaca madre (ej. '3014')."
-    )
-    fecha_parto: Optional[str] = Field(
-        default=None,
-        description="Fecha del parto en formato YYYY-MM-DD. Resolver fechas relativas como hoy o ayer."
-    )
-    cria_crotal: Optional[str] = Field(
-        default=None,
-        description="Código o crotal de 4 dígitos de la cría nacida (ej. '5012')."
-    )
-    cria_sexo: Optional[Literal["M", "H"]] = Field(
-        default="H",
-        description="Sexo de la cría: 'M' para macho/ternero, 'H' para hembra/ternera."
-    )
-    cria_raza: Optional[str] = Field(
-        default="Retinta",
-        description="Raza de la cría (ej. Limusina, Retinta, Charolais, Avileña)."
-    )
-    cria_recinto: Optional[str] = Field(
-        default="PASTO",
-        description="Recinto asignado a la cría: 'PASTO' o 'CEBADERO'."
-    )
-    cria_finca: Optional[str] = Field(
-        default=None,
-        description="Nombre de la finca de la explotación donde se ubicará la cría (ej. 'Finca Montealto'). Null si no se indica."
-    )
 
 
 MESES_ESP = {
@@ -453,4 +468,211 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
         "cria_recinto": "PASTO",
         "cria_finca": None,
         "error": "El análisis de audio directo requiere configurar la variable GEMINI_API_KEY."
+    }
+
+
+def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
+    """
+    Parser simulado / fallback para importar lotes de animales a partir de texto o dictado.
+    Identifica múltiples crotales, sexo, raza, año/fecha y si tienen madre o son fundadores.
+    """
+    texto_lower = texto.lower()
+    hoy = timezone.now().date()
+
+    # 1. Detectar finca si se menciona
+    finca_detectada = None
+    if fincas_disponibles:
+        for f_nom in fincas_disponibles:
+            if f_nom.lower() in texto_lower:
+                finca_detectada = f_nom
+                break
+    if not finca_detectada:
+        m_f = re.search(r'\b(?:en\s+la\s+finca|en\s+finca|finca)\s+([a-záéíóú0-9_\-]+(?:\s+[a-záéíóú0-9_\-]+)?)\b', texto_lower)
+        if m_f:
+            finca_detectada = m_f.group(1).title()
+
+    # 2. Recinto global
+    recinto_global = "PASTO"
+    if "cebadero" in texto_lower:
+        recinto_global = "CEBADERO"
+    elif "apartado" in texto_lower:
+        recinto_global = "APARTADO"
+
+    # 3. Detectar fecha/año general por si los animales nacieron en un año concreto
+    anio_nacimiento = None
+    m_anio = re.search(r'\bnacid[ao]s?\s+(?:en\s+)?(?:el\s+año\s+)?(\d{4})\b', texto_lower)
+    if m_anio:
+        anio_nacimiento = m_anio.group(1)
+
+    # 4. Dividir por segmentos o encontrar patrones de animales
+    # Ej: "Añade al pasto los animales 4001 macho limusín, 4002 hembra charolesa y 4003 hembra sin madre nacidos en 2024"
+    # Buscar ocurrencias de crotales
+    # Tokens o patrones: (\d{1,4})\s*(macho|hembra|ternero|ternera)?...
+    animales_extraidos = []
+    
+    # Encontrar todas las menciones a números candidatos
+    candidatos = re.finditer(r'\b(\d{1,4})\b', texto)
+    posiciones = []
+    for c in candidatos:
+        val = c.group(1)
+        # Ignorar si es el año de nacimiento
+        if anio_nacimiento and val == anio_nacimiento:
+            continue
+        posiciones.append((c.start(), c.end(), val))
+
+    for idx, (start, end, crotal_raw) in enumerate(posiciones):
+        # Tomar la ventana de texto alrededor de este crotal hasta el siguiente crotal
+        next_start = posiciones[idx + 1][0] if idx + 1 < len(posiciones) else len(texto)
+        ventana = texto[start:next_start].lower()
+
+        c_norm = normalizar_crotal(crotal_raw)
+        if not c_norm:
+            continue
+
+        # Sexo
+        sexo = "H"
+        if any(w in ventana for w in ["macho", "ternero", "becerro", "toro"]):
+            sexo = "M"
+        elif any(w in ventana for w in ["hembra", "ternera", "becerra", "vaca"]):
+            sexo = "H"
+
+        # Raza
+        raza = "Limusina"
+        for r_key, r_nom in [
+            ("limusin", "Limusina"), ("limosina", "Limusina"), ("charol", "Charolesa"),
+            ("retinta", "Retinta"), ("morucha", "Morucha"), ("angus", "Angus"),
+            ("frisona", "Frisona"), ("avileña", "Avileña-Negra Ibérica"), ("cruzad", "Cruzado")
+        ]:
+            if r_key in ventana:
+                raza = r_nom
+                break
+
+        # Madre: buscar si se menciona "hijo de XXXX" o "madre XXXX"
+        crotal_madre = None
+        m_madre = re.search(r'(?:madre|hij[ao]\s+de)\s*(?:#|n[ºo])?\s*(\d{1,4})\b', ventana)
+        if m_madre:
+            crotal_madre = normalizar_crotal(m_madre.group(1))
+
+        # Fecha nacimiento
+        fnac = None
+        m_fecha = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', ventana)
+        if m_fecha:
+            d, m, y = map(int, m_fecha.groups())
+            try:
+                fnac = date(y, m, d).strftime('%Y-%m-%d')
+            except ValueError:
+                pass
+        elif anio_nacimiento:
+            fnac = f"{anio_nacimiento}-01-01"
+
+        animales_extraidos.append({
+            "crotal": c_norm,
+            "sexo": sexo,
+            "raza": raza,
+            "fecha_nacimiento": fnac,
+            "crotal_madre": crotal_madre,
+            "sub_ubicacion": recinto_global,
+        })
+
+    return {
+        "intencion": "IMPORTAR_LOTE",
+        "finca_nombre": finca_detectada,
+        "animales": animales_extraidos,
+    }
+
+
+def _llamar_gemini_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None) -> dict:
+    """Invoca Gemini 2.5 Flash para extraer estructuradamente un lote de animales desde PDF o texto."""
+    if genai is None or types is None:
+        raise ImportError("El paquete google-genai no está disponible.")
+
+    api_key = getattr(settings, 'GEMINI_API_KEY', '')
+    client = genai.Client(api_key=api_key)
+
+    hoy = timezone.now().date()
+    hoy_iso = hoy.strftime('%Y-%m-%d')
+    fincas_str = ", ".join(fincas_disponibles) if fincas_disponibles else "no especificadas"
+
+    system_instruction = (
+        f"Eres el Asistente Experto en Gestión Ganadera Bovina para importación de censos. "
+        f"Fecha actual: {hoy_iso}. Fincas disponibles en la explotación: [{fincas_str}]. "
+        f"Tu tarea es analizar el documento PDF oficial o el texto/orden proporcionado y extraer la lista completa de animales a censar. "
+        f"Reglas estrictas:\n"
+        f"1. crotal: Obligatorio. Formato de 4 dígitos numéricos (ej. '4001', '0015'). Normaliza números enteros a 4 dígitos rellenando con ceros si es preciso.\n"
+        f"2. sexo: 'H' para hembra/vaca/ternera/novilla, 'M' para macho/toro/buey/ternero/becerro.\n"
+        f"3. raza: Limusina, Retinta, Charolesa, etc. (por defecto 'Limusina' si no se precisa).\n"
+        f"4. fecha_nacimiento: YYYY-MM-DD si figura en el documento o se deduce del texto; null si no se conoce.\n"
+        f"5. crotal_madre: Crotal de 4 dígitos de la vaca madre si se indica explícitamente. Si no figura o el animal es fundador / sin madre, DEBES devolver null.\n"
+        f"6. sub_ubicacion: 'PASTO', 'CEBADERO' o 'APARTADO' (por defecto 'PASTO').\n"
+        f"7. finca_nombre: Nombre de la finca de la explotación si se menciona en el documento o texto; null si no figura."
+    )
+
+    contents = []
+    if archivo_bytes:
+        part = types.Part.from_bytes(data=bytes(archivo_bytes), mime_type=mime_type)
+        contents.append(part)
+        contents.append("Extrae todos los animales del documento oficial adjunto siguiendo el esquema estructurado.")
+    elif texto:
+        contents.append(str(texto))
+
+    response = client.models.generate_content(
+        model='gemini-2.5-flash',
+        contents=contents,
+        config=types.GenerateContentConfig(
+            system_instruction=system_instruction,
+            response_mime_type='application/json',
+            response_schema=LoteImportOutput,
+            temperature=0.1,
+        )
+    )
+
+    res_dict = json.loads(response.text)
+    # Sanitizar y normalizar crotales
+    if res_dict.get('animales'):
+        for item in res_dict['animales']:
+            if item.get('crotal'):
+                item['crotal'] = normalizar_crotal(item['crotal'])
+            if item.get('crotal_madre'):
+                item['crotal_madre'] = normalizar_crotal(item['crotal_madre'])
+    return res_dict
+
+
+def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None) -> dict:
+    """
+    Punto de entrada principal para importar lotes de animales (PDF oficial o texto/dictado).
+    Utiliza Gemini 2.5 Flash con timeout o conmuta al parser simulado en caso de fallo.
+    """
+    api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
+
+    if api_key.strip():
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    _llamar_gemini_lote,
+                    texto=texto,
+                    archivo_bytes=archivo_bytes,
+                    mime_type=mime_type,
+                    fincas_disponibles=fincas_disponibles
+                )
+                return future.result(timeout=15.0)
+        except Exception as e:
+            logger.warning(f"Error o timeout al invocar Gemini para importación de lote ({e}). Usando fallback.")
+            if texto:
+                return _extraer_lote_regex(texto, fincas_disponibles=fincas_disponibles)
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": None,
+                "animales": [],
+                "error": f"No se pudo procesar el archivo con el servicio de IA: {str(e)}"
+            }
+
+    # Modo sin API key
+    if texto:
+        return _extraer_lote_regex(texto, fincas_disponibles=fincas_disponibles)
+
+    return {
+        "intencion": "IMPORTAR_LOTE",
+        "finca_nombre": None,
+        "animales": [],
+        "error": "El análisis de documentos PDF requiere configurar la variable GEMINI_API_KEY."
     }

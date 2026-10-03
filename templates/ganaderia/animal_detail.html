@@ -61,7 +61,9 @@
                         {% if animal.madre %}
                         <a href="{% url 'animal_detail' crotal=animal.madre.crotal %}">Crotal {{ animal.madre.crotal }}</a>
                         {% else %}
-                        <span class="text-muted">Desconocida / No registrada</span>
+                        <span class="badge badge-outline" style="color: #64748b; border: 1px dashed #cbd5e1; font-size: 0.8rem;">
+                            Fundador / Sin madre registrada
+                        </span>
                         {% endif %}
                     </td>
                 </tr>

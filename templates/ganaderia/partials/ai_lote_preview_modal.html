@@ -1,0 +1,161 @@
+<div id="ai-lote-preview-modal" class="modal-overlay" style="display: flex;">
+    <div class="modal" style="max-width: 850px; width: 95%;">
+        <div class="modal-header d-flex justify-between align-center">
+            <h3 style="margin: 0; font-size: 1.15rem; display: flex; align-items: center; gap: 0.5rem;">
+                <span>📋</span> Importación Masiva de Censo (IA / PDF / Dictado)
+            </h3>
+            <button type="button" class="btn btn-sm btn-outline" onclick="closeAiModal()">✕</button>
+        </div>
+
+        <div class="modal-body" style="max-height: 75vh; overflow-y: auto;">
+            {% if error_general %}
+            <div class="alert alert-danger mb-3" style="background-color: #fee2e2; border-left: 4px solid #ef4444; color: #991b1b; padding: 0.75rem 1rem; border-radius: 6px;">
+                <strong>Error:</strong> {{ error_general }}
+            </div>
+            {% endif %}
+
+            {% if animales %}
+            <div style="background-color: #f8fafc; padding: 1rem 1.25rem; border-radius: 8px; border: 1px solid #e2e8f0;" class="mb-3">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+                    <div>
+                        <strong style="color: #0f172a; font-size: 0.95rem;">Resumen del Lote Extraído:</strong>
+                        <div style="color: #475569; font-size: 0.85rem; margin-top: 0.25rem;">
+                            Total a importar: <strong><span id="lote-count-total">{{ total_validos }}</span> animales</strong> 
+                            ({{ total_hembras }} hembras, {{ total_machos }} machos) de {{ total_animales }} detectados.
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 1rem; align-items: center;">
+                        <div>
+                            <label style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 2px;">
+                                Finca de Destino *
+                            </label>
+                            <select name="finca_id" form="ai-lote-confirm-form" class="form-control form-control-sm" style="font-weight: 600;">
+                                {% for f in fincas_explotacion %}
+                                <option value="{{ f.id }}" {% if finca_destino and finca_destino.id == f.id %}selected{% endif %}>
+                                    {{ f.nombre }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+
+                        <div>
+                            <label style="font-size: 0.75rem; font-weight: 600; color: #64748b; text-transform: uppercase; display: block; margin-bottom: 2px;">
+                                Recinto Asignado *
+                            </label>
+                            <select name="recinto_global" form="ai-lote-confirm-form" class="form-control form-control-sm" style="font-weight: 600;">
+                                <option value="PASTO" selected>🌱 Pasto</option>
+                                <option value="CEBADERO">🌾 Cebadero</option>
+                                <option value="APARTADO">🧱 Apartado</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <form id="ai-lote-confirm-form" method="post" action="{% url 'asistente_lote_ejecutar' %}" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '⏳ Guardando lote...'; }">
+                {% csrf_token %}
+
+                <div class="table-responsive" style="max-height: 400px; overflow-y: auto; border: 1px solid #e2e8f0; border-radius: 6px;">
+                    <table class="table" style="margin: 0; font-size: 0.875rem;">
+                        <thead style="position: sticky; top: 0; background-color: #f1f5f9; z-index: 10;">
+                            <tr>
+                                <th style="width: 40px; text-align: center;">
+                                    <input type="checkbox" id="check-all-lote" checked onchange="toggleSelectAllLote(this)">
+                                </th>
+                                <th>Crotal</th>
+                                <th>Sexo</th>
+                                <th>Raza</th>
+                                <th>Fecha Nacimiento</th>
+                                <th>Madre / Genealogía</th>
+                                <th>Estado / Validación</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for a in animales %}
+                            <tr style="{% if not a.es_valido %}background-color: #fef2f2; color: #991b1b;{% endif %}">
+                                <td style="text-align: center;">
+                                    <input type="checkbox" name="seleccionados" value="{{ a.index }}" {% if a.es_valido %}checked{% else %}disabled{% endif %} onchange="updateLoteCounter()">
+                                    <input type="hidden" name="crotal_{{ a.index }}" value="{{ a.crotal }}">
+                                    <input type="hidden" name="sexo_{{ a.index }}" value="{{ a.sexo }}">
+                                    <input type="hidden" name="raza_{{ a.index }}" value="{{ a.raza }}">
+                                    <input type="hidden" name="fecha_nacimiento_{{ a.index }}" value="{{ a.fecha_nacimiento|default:'' }}">
+                                    <input type="hidden" name="crotal_madre_{{ a.index }}" value="{{ a.crotal_madre|default:'' }}">
+                                </td>
+                                <td>
+                                    <strong>{{ a.crotal|default:"-" }}</strong>
+                                </td>
+                                <td>
+                                    {% if a.sexo == 'H' %}
+                                    <span class="badge badge-info" style="font-size: 0.75rem;">♀ Hembra</span>
+                                    {% else %}
+                                    <span class="badge badge-secondary" style="font-size: 0.75rem;">♂ Macho</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ a.raza }}</td>
+                                <td>
+                                    {% if a.fecha_nacimiento %}
+                                    {{ a.fecha_nacimiento }}
+                                    {% else %}
+                                    <span class="text-muted" style="font-style: italic;">Hoy</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if a.crotal_madre %}
+                                    <span>Madre: #{{ a.crotal_madre }}</span>
+                                    {% else %}
+                                    <span class="badge badge-outline" style="color: #64748b; border: 1px dashed #cbd5e1; font-size: 0.75rem;">
+                                        Fundador / Sin madre registrada
+                                    </span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if a.es_valido %}
+                                    <span style="color: #15803d; font-weight: 600; font-size: 0.8rem;">✓ Válido</span>
+                                    {% else %}
+                                    <span style="color: #dc2626; font-weight: 600; font-size: 0.8rem;" title="{{ a.error }}">⛔ {{ a.error }}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </form>
+            {% else %}
+            {% if not error_general %}
+            <div class="alert alert-warning">
+                No se detectaron animales válidos en la entrada proporcionada.
+            </div>
+            {% endif %}
+            {% endif %}
+        </div>
+
+        <div class="modal-footer" style="padding: 1rem 1.5rem; background-color: #f8fafc; border-top: 1px solid var(--color-border); display: flex; gap: 0.75rem;">
+            {% if total_validos > 0 %}
+            <button type="submit" form="ai-lote-confirm-form" class="btn btn-primary" style="flex: 1; justify-content: center;">
+                ✓ Confirmar y Registrar Animales en el Censo
+            </button>
+            <button type="button" class="btn btn-secondary" onclick="closeAiModal()">Cancelar</button>
+            {% else %}
+            <button type="button" class="btn btn-secondary w-100" onclick="closeAiModal()">Cerrar</button>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleSelectAllLote(master) {
+    const checks = document.querySelectorAll('input[name="seleccionados"]:not(:disabled)');
+    checks.forEach(c => c.checked = master.checked);
+    updateLoteCounter();
+}
+
+function updateLoteCounter() {
+    const checks = document.querySelectorAll('input[name="seleccionados"]:checked');
+    const counter = document.getElementById('lote-count-total');
+    if (counter) {
+        counter.textContent = checks.length;
+    }
+}
+</script>

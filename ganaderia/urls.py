@@ -38,6 +38,8 @@ urlpatterns = [
     # Asistente IA
     path('asistente/preview/', views.asistente_preview, name='asistente_preview'),
     path('asistente/ejecutar/', views.asistente_ejecutar, name='asistente_ejecutar'),
+    path('asistente/lote-preview/', views.asistente_lote_preview, name='asistente_lote_preview'),
+    path('asistente/lote-ejecutar/', views.asistente_lote_ejecutar, name='asistente_lote_ejecutar'),
     
     # API endpoints
     path('api/validar-crotal/', views.api_validar_crotal, name='api_validar_crotal'),

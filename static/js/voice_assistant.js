@@ -110,7 +110,45 @@ document.addEventListener('DOMContentLoaded', () => {
         const formData = new FormData();
         formData.append('texto', texto);
         formData.append('csrfmiddlewaretoken', getCSRFToken());
-        enviarComando(formData);
+
+        // Si el texto parece una orden de lote/censo múltiple
+        const tLower = texto.toLowerCase();
+        const esLote = tLower.includes('lote') || tLower.includes('añade') || tLower.includes('anade') || 
+                       tLower.includes('importa') || (tLower.match(/\b\d{4}\b/g) || []).length > 2;
+
+        if (esLote) {
+            btnSubmit.disabled = true;
+            btnMic.disabled = true;
+            aiInput.disabled = true;
+            const originalText = btnSubmit.innerHTML;
+            btnSubmit.innerHTML = '⏳ Analizando lote...';
+
+            const headers = {};
+            const token = getCSRFToken();
+            if (token) headers['X-CSRFToken'] = token;
+
+            fetch('/asistente/lote-preview/', {
+                method: 'POST',
+                headers: headers,
+                body: formData,
+            })
+            .then(res => res.text())
+            .then(html => {
+                modalContainer.innerHTML = html;
+            })
+            .catch(err => {
+                console.error(err);
+                alert(`Error al procesar lote: ${err.message}`);
+            })
+            .finally(() => {
+                btnSubmit.disabled = false;
+                btnMic.disabled = false;
+                aiInput.disabled = false;
+                btnSubmit.innerHTML = originalText;
+            });
+        } else {
+            enviarComando(formData);
+        }
     }
 
     btnSubmit.addEventListener('click', enviarTexto);
@@ -135,10 +173,67 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    // --- RECONOCIMIENTO DE VOZ NATIVO ---
+    // --- SUBIDA DE ARCHIVO PDF OFICIAL ---
+    const pdfInput = document.getElementById('pdf-upload-input');
+    if (pdfInput) {
+        pdfInput.addEventListener('change', async () => {
+            const file = pdfInput.files[0];
+            if (!file) return;
+
+            btnSubmit.disabled = true;
+            btnMic.disabled = true;
+            aiInput.disabled = true;
+            const originalText = btnSubmit.innerHTML;
+            btnSubmit.innerHTML = '⏳ Procesando PDF oficial con IA...';
+
+            const formData = new FormData();
+            formData.append('archivo', file);
+            formData.append('csrfmiddlewaretoken', getCSRFToken());
+
+            try {
+                const headers = {};
+                const token = getCSRFToken();
+                if (token) headers['X-CSRFToken'] = token;
+
+                const response = await fetch('/asistente/lote-preview/', {
+                    method: 'POST',
+                    headers: headers,
+                    body: formData,
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Error en el servidor: ${response.status}`);
+                }
+
+                const html = await response.text();
+                modalContainer.innerHTML = html;
+            } catch (err) {
+                console.error('Error al procesar PDF:', err);
+                alert(`Error al procesar el archivo PDF: ${err.message}`);
+            } finally {
+                pdfInput.value = '';
+                btnSubmit.disabled = false;
+                btnMic.disabled = false;
+                aiInput.disabled = false;
+                btnSubmit.innerHTML = originalText;
+            }
+        });
+    }
+
+    // --- RECONOCIMIENTO DE VOZ NATIVO CONTINUO ---
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     let recognition = null;
     let isRecordingSpeech = false;
+    let silenceTimer = null;
+
+    function resetSilenceTimer() {
+        if (silenceTimer) clearTimeout(silenceTimer);
+        silenceTimer = setTimeout(() => {
+            if (isRecordingSpeech && recognition) {
+                recognition.stop();
+            }
+        }, 5000); // 5 segundos de silencio continuo
+    }
 
     // MediaRecorder Fallback
     let mediaRecorder = null;
@@ -148,36 +243,47 @@ document.addEventListener('DOMContentLoaded', () => {
     if (SpeechRecognition && esContextoSeguro) {
         recognition = new SpeechRecognition();
         recognition.lang = 'es-ES';
-        recognition.continuous = false;
+        recognition.continuous = true;
         recognition.interimResults = false;
 
         recognition.onstart = () => {
             isRecordingSpeech = true;
             btnMic.classList.add('recording');
-            btnMic.title = 'Escuchando... pulsa para parar';
-            aiInput.placeholder = '🎙️ Escuchando... habla ahora (ej. "La 3014 parió hoy ternera 5012 limusina")';
+            btnMic.title = 'Escuchando continuo... pulsa el micro para terminar';
+            aiInput.placeholder = '🎙️ Escuchando continuo... habla con calma o pulsa el micro al terminar';
+            resetSilenceTimer();
         };
 
         recognition.onresult = (event) => {
-            const transcript = event.results[0][0].transcript;
-            aiInput.value = transcript;
-            enviarTexto();
+            resetSilenceTimer();
+            let accumulated = '';
+            for (let i = 0; i < event.results.length; i++) {
+                accumulated += event.results[i][0].transcript + ' ';
+            }
+            aiInput.value = accumulated.trim();
         };
 
         recognition.onerror = (event) => {
             console.warn('SpeechRecognition error:', event.error);
-            stopSpeech();
+            if (event.error !== 'no-speech') {
+                stopSpeech();
+            }
         };
 
         recognition.onend = () => {
             stopSpeech();
+            // Si hay texto acumulado tras finalizar, procesarlo
+            if (aiInput.value.trim().length > 0) {
+                enviarTexto();
+            }
         };
 
         function stopSpeech() {
+            if (silenceTimer) clearTimeout(silenceTimer);
             isRecordingSpeech = false;
             btnMic.classList.remove('recording');
             btnMic.title = 'Dictar por voz';
-            aiInput.placeholder = "💬 Dicta o escribe un parto (ej. 'La 3014 parió hoy ternera 5012 limusina')...";
+            aiInput.placeholder = "💬 Dicta o escribe un parto o lote (ej. 'Añadir 4001 macho y 4002 hembra')...";
         }
 
         btnMic.addEventListener('click', () => {
@@ -185,6 +291,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 recognition.stop();
             } else {
                 try {
+                    aiInput.value = '';
                     recognition.start();
                 } catch (e) {
                     console.error('Error al iniciar reconocimiento:', e);
@@ -220,7 +327,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 mediaRecorder.onstop = () => {
                     isRecordingMedia = false;
                     btnMic.classList.remove('recording');
-                    aiInput.placeholder = "💬 Dicta o escribe un parto (ej. 'La 3014 parió hoy ternera 5012 limusina')...";
+                    aiInput.placeholder = "💬 Dicta o escribe un parto o lote (ej. 'Añadir 4001 macho y 4002 hembra')...";
                     stream.getTracks().forEach(track => track.stop());
 
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
