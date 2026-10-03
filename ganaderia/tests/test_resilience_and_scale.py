@@ -19,6 +19,7 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
     """Pruebas de concurrencia, restricciones de BD, rendimiento y resiliencia."""
 
     def setUp(self):
+        Explotacion.objects.all().delete()
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Resiliencia",
             codigo_rega="ES999999999999"

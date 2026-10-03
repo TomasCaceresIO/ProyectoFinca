@@ -1000,6 +1000,7 @@ def asistente_lote_preview(request):
     total_hembras = 0
     total_machos = 0
     crotales_en_lote = set()
+    crotales_duplicados = []
 
     for idx, item in enumerate(animales_extraidos):
         crotal = item.get('crotal')
@@ -1020,9 +1021,13 @@ def asistente_lote_preview(request):
         elif crotal in crotales_vivos_existentes:
             error = "Crotal duplicado en censo activo"
             es_valido = False
+            if crotal not in crotales_duplicados:
+                crotales_duplicados.append(crotal)
         elif crotal in crotales_en_lote:
             error = "Crotal repetido dentro del mismo lote"
             es_valido = False
+            if crotal not in crotales_duplicados:
+                crotales_duplicados.append(crotal)
         else:
             crotales_en_lote.add(crotal)
 
@@ -1053,6 +1058,8 @@ def asistente_lote_preview(request):
         'total_validos': total_hembras + total_machos,
         'total_hembras': total_hembras,
         'total_machos': total_machos,
+        'total_duplicados': len(crotales_duplicados),
+        'crotales_duplicados_str': ", ".join(crotales_duplicados),
         'aviso_banner': datos.get('aviso_banner'),
     })
 

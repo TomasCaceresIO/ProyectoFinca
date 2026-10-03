@@ -437,32 +437,51 @@ def procesar_comando_parto(
 
 def _extraer_tabla_pdf_dinamica(texto: str, fincas_disponibles: list = None) -> list:
     """
-    Parser heurístico dinámico para tablas de documentos PDF de censo con columnas en orden variable.
-    Detecta la cabecera por palabras clave y mapea la posición/índice de cada columna.
-    Extrae fila a fila evitando solapamientos entre crotales, fechas, órdenes o razas.
-    Retorna una lista de diccionarios de animales.
+    Parser determinista línea a línea para tablas de documentos PDF de censo oficial (SITRAN / OCA).
+    Procesa exclusivamente las filas tabulares reales con separadores '|' o tabuladores.
+    Descarta encabezados, títulos, metadatos y pies de página.
+    Mapea con precisión:
+      - Crotal: número de 4 dígitos estricto (ignora Nº de fila o años).
+      - Sexo: 'H' o 'M'.
+      - Fecha Nacimiento: parsea DD/MM/AAAA a ISO YYYY-MM-DD (sin sustituir por hoy).
+      - Raza: texto de la raza.
+      - Madre: None si es Fundadora/Sin madre/- o crotal de 4 dígitos.
+      - Ubicación: PASTO, CEBADERO, APARTADO o BAJA.
     """
     lineas = [ln.strip() for ln in texto.splitlines() if ln.strip()]
     if not lineas:
         return []
 
-    header_idx = -1
+    animales = []
     col_map = {}
 
-    for i, linea in enumerate(lineas):
+    PALABRAS_DESCARTAR = [
+        "libro de registro", "modelo oca", "censo oficial", "listado oficial",
+        "inventario de animales", "explotación", "explotacion", "titular",
+        "fecha de emisión", "fecha de emision", "página", "pagina", "total",
+        "firma", "observaciones", "lote 1", "lote 2", "lote 3", "lote 4"
+    ]
+
+    for linea in lineas:
         linea_lower = linea.lower()
-        kw_hits = sum(1 for kw in ["crotal", "identificador", "chapa", "sexo", "sex", "nacimiento", "f. nac", "fecha", "raza", "madre", "ubicación", "recinto"] if kw in linea_lower)
-        if kw_hits >= 2 and ("crotal" in linea_lower or "identificador" in linea_lower or "chapa" in linea_lower):
-            partes = [p.strip() for p in re.split(r'\||\t|\s{2,}', linea) if p.strip()]
-            if len(partes) >= 2:
+
+        # Descartar separadores de página de pypdf o decoradores
+        if linea_lower.startswith("--- página") or linea_lower.startswith("===") or linea_lower.startswith("___"):
+            continue
+
+        # Detectar si es una fila de cabecera para actualizar col_map
+        kw_hits = sum(1 for kw in ["crotal", "identificador", "chapa", "sexo", "sex", "nacimiento", "f. nac", "f.nac", "fecha", "raza", "madre", "dam", "ubicación", "ubicacion", "recinto", "destino"] if kw in linea_lower)
+        if kw_hits >= 2 and any(k in linea_lower for k in ["crotal", "identificador", "chapa"]):
+            partes_h = [p.strip() for p in re.split(r'\||\t', linea.strip('|')) if p.strip()]
+            if len(partes_h) >= 2:
                 temp_map = {}
-                for idx, p in enumerate(partes):
+                for idx, p in enumerate(partes_h):
                     p_l = p.lower()
                     if any(k in p_l for k in ["crotal", "identificador", "chapa"]):
                         temp_map['crotal'] = idx
                     elif any(k in p_l for k in ["sexo", "sex"]):
                         temp_map['sexo'] = idx
-                    elif any(k in p_l for k in ["nacimiento", "f. nac", "fecha nac", "f.nac"]):
+                    elif any(k in p_l for k in ["nacimiento", "f. nac", "f.nac", "fecha nac"]):
                         temp_map['fecha_nacimiento'] = idx
                     elif "fecha" in p_l and 'fecha_nacimiento' not in temp_map:
                         temp_map['fecha_nacimiento'] = idx
@@ -474,87 +493,119 @@ def _extraer_tabla_pdf_dinamica(texto: str, fincas_disponibles: list = None) -> 
                         temp_map['sub_ubicacion'] = idx
 
                 if 'crotal' in temp_map:
-                    header_idx = i
                     col_map = temp_map
-                    break
+                    continue
 
-    if header_idx == -1 or 'crotal' not in col_map:
-        return []
+        # Descartar títulos y metadatos que contengan palabras prohibidas si no son filas tabulares con datos
+        if any(pd in linea_lower for pd in PALABRAS_DESCARTAR):
+            if not any(re.search(r'\b\d{4}\b', p) for p in linea.split('|')):
+                continue
 
-    animales = []
-    c_idx = col_map['crotal']
-    s_idx = col_map.get('sexo')
-    f_idx = col_map.get('fecha_nacimiento')
-    r_idx = col_map.get('raza')
-    m_idx = col_map.get('crotal_madre')
-    u_idx = col_map.get('sub_ubicacion')
-
-    for linea in lineas[header_idx + 1:]:
-        if any(h in linea.lower() for h in ["total", "página", "pagina", "firma", "titular", "explotación", "explotacion"]):
+        # Solo procesar líneas con separadores tabulares
+        if '|' not in linea and '\t' not in linea:
             continue
 
-        partes = [p.strip() for p in re.split(r'\||\t|\s{2,}', linea) if p.strip()]
-        if len(partes) <= c_idx:
+        partes = [p.strip() for p in (linea.strip('|').split('|') if '|' in linea else linea.split('\t'))]
+        if len(partes) < 2:
+            continue
+
+        # Determinar índices según col_map o según posición estándar
+        if col_map and 'crotal' in col_map:
+            c_idx = col_map.get('crotal', 1)
+            s_idx = col_map.get('sexo')
+            f_idx = col_map.get('fecha_nacimiento')
+            r_idx = col_map.get('raza')
+            m_idx = col_map.get('crotal_madre')
+            u_idx = col_map.get('sub_ubicacion')
+        else:
+            # Posición estándar: Nº (0) | Crotal (1) | Sexo (2) | F. Nac (3) | Raza (4) | Madre (5) | Ubicación (6)
+            if len(partes) > 1 and re.search(r'^\d{4}$', partes[1]):
+                c_idx, s_idx, f_idx, r_idx, m_idx, u_idx = 1, 2, 3, 4, 5, 6
+            elif len(partes) > 0 and re.search(r'^\d{4}$', partes[0]):
+                c_idx, s_idx, f_idx, r_idx, m_idx, u_idx = 0, 1, 2, 3, 4, 5
+            else:
+                c_idx = None
+                for idx, c in enumerate(partes):
+                    if re.match(r'^\d{4}$', c) and not c.startswith(('19', '20')):
+                        c_idx = idx
+                        break
+                    elif re.match(r'^\d{4}$', c) and idx == 1:
+                        c_idx = 1
+                        break
+                if c_idx is None:
+                    continue
+                s_idx, f_idx, r_idx, m_idx, u_idx = 2, 3, 4, 5, 6
+
+        if c_idx >= len(partes):
             continue
 
         raw_crotal = partes[c_idx]
-        crotal_limpio = normalizar_crotal(raw_crotal)
-        if not crotal_limpio or len(crotal_limpio) != 4 or not crotal_limpio.isdigit():
-            m_c = re.search(r'\b\d{4}\b', raw_crotal)
-            if m_c:
-                crotal_limpio = m_c.group(0)
-            else:
-                continue
+        m_c = re.search(r'\b\d{4}\b', raw_crotal)
+        if not m_c:
+            continue
+        crotal_limpio = m_c.group(0)
 
+        # Sexo
         sexo = 'H'
         if s_idx is not None and s_idx < len(partes):
             s_val = partes[s_idx].upper().strip()
-            if s_val == 'M' or 'MACHO' in s_val or s_val.startswith('M'):
+            if any(m in s_val for m in ['M', 'MACHO', 'TERNERO', 'TORO']) and not any(h in s_val for h in ['HEMBRA', 'TERNERA', 'NOVILLA', 'VACA']):
                 sexo = 'M'
-            elif s_val == 'H' or 'HEMBRA' in s_val or s_val.startswith('H'):
+            elif any(h in s_val for h in ['H', 'HEMBRA', 'TERNERA', 'NOVILLA', 'VACA']):
                 sexo = 'H'
 
+        # Fecha de Nacimiento (estricto DD/MM/AAAA o YYYY-MM-DD, nunca fijar a hoy)
         fecha_nac = None
         if f_idx is not None and f_idx < len(partes):
-            raw_f = partes[f_idx]
-            m_d = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', raw_f)
+            raw_f = partes[f_idx].strip()
+            m_d = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', raw_f)
             if m_d:
                 d, m, y = map(int, m_d.groups())
                 try:
                     fecha_nac = date(y, m, d).strftime('%Y-%m-%d')
                 except ValueError:
                     pass
-            elif re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', raw_f):
-                m_d2 = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', raw_f)
-                y, m, d = map(int, m_d2.groups())
-                try:
-                    fecha_nac = date(y, m, d).strftime('%Y-%m-%d')
-                except ValueError:
-                    pass
+            if not fecha_nac:
+                m_iso = re.search(r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b', raw_f)
+                if m_iso:
+                    y, m, d = map(int, m_iso.groups())
+                    try:
+                        fecha_nac = date(y, m, d).strftime('%Y-%m-%d')
+                    except ValueError:
+                        pass
 
+        # Raza
         raza = 'Limusina'
         if r_idx is not None and r_idx < len(partes):
-            r_val = partes[r_idx]
-            if len(r_val) >= 3 and not r_val.isdigit():
+            r_val = partes[r_idx].strip()
+            if r_val and r_val != '-' and not r_val.isdigit() and len(r_val) >= 3:
                 raza = r_val.title()
 
+        # Madre (Fundadora / Sin madre -> None; si tiene 4 dígitos -> crotal)
         crotal_madre = None
         if m_idx is not None and m_idx < len(partes):
-            raw_m = partes[m_idx]
-            if raw_m.lower() not in ['fundadora', 'sin madre', '-', '', 'ninguna', 'none', 'null']:
+            raw_m = partes[m_idx].strip()
+            if raw_m.lower() not in ['fundadora', 'sin madre', '-', '', 'ninguna', 'none', 'null', 'desconocida', 'no']:
                 m_norm = normalizar_crotal(raw_m)
                 if m_norm and len(m_norm) == 4 and m_norm.isdigit():
                     crotal_madre = m_norm
+                else:
+                    m_4d = re.search(r'\b\d{4}\b', raw_m)
+                    if m_4d:
+                        crotal_madre = m_4d.group(0)
 
+        # Ubicación
         sub_ubicacion = 'PASTO'
         if u_idx is not None and u_idx < len(partes):
-            u_val = partes[u_idx].upper()
+            u_val = partes[u_idx].upper().strip()
             if 'CEB' in u_val:
                 sub_ubicacion = 'CEBADERO'
             elif 'APA' in u_val:
                 sub_ubicacion = 'APARTADO'
             elif 'BAJ' in u_val or 'DEF' in u_val:
                 sub_ubicacion = 'BAJA'
+            else:
+                sub_ubicacion = 'PASTO'
 
         animales.append({
             'crotal': crotal_limpio,
@@ -609,13 +660,25 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
     if m_anio:
         anio_nacimiento = m_anio.group(1)
 
+    # Detectar todas las fechas en el texto para no confundir días, meses o años con crotales
+    posiciones_fecha = set()
+    for m in re.finditer(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', texto):
+        posiciones_fecha.update(range(m.start(), m.end()))
+    for m in re.finditer(r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b', texto):
+        posiciones_fecha.update(range(m.start(), m.end()))
+
     animales_extraidos = []
 
     candidatos = list(re.finditer(r'\b(\d{1,4})\b', texto))
     posiciones = []
     for c in candidatos:
         val = c.group(1)
+        if any(p in posiciones_fecha for p in range(c.start(), c.end())):
+            continue
         if anio_nacimiento and val == anio_nacimiento:
+            continue
+        sub_ant = texto[max(0, c.start() - 8):c.start()].lower()
+        if re.search(r'(?:\b(?:n[ºo°\.]|fila)|#)\s*$', sub_ant):
             continue
         posiciones.append((c.start(), c.end(), val))
 
@@ -795,9 +858,20 @@ def procesar_importacion_lote(
                 "animales": []
             }
 
+        texto_acumulado = "\n\n".join(paginas_con_texto)
+
+        # 1. Intentar extracción determinista del documento completo (soporta tablas de múltiples páginas)
+        animales_doc = _extraer_tabla_pdf_dinamica(texto_acumulado, fincas_disponibles=fincas_disponibles)
+        if animales_doc:
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": None,
+                "animales": animales_doc,
+                "error": None
+            }
+
         # Sin cliente Groq configurado: fallback local
         if not client:
-            texto_acumulado = "\n\n".join(paginas_con_texto)
             res_local = _extraer_lote_regex(texto_acumulado, fincas_disponibles=fincas_disponibles)
             if res_local.get("animales"):
                 return {
@@ -814,7 +888,7 @@ def procesar_importacion_lote(
                 "animales": []
             }
 
-        # Procesamiento página a página (primero tabular determinista, luego Groq si es texto desestructurado)
+        # 2. Procesamiento página a página con Groq para textos no tabulares
         todos_los_animales = []
         for texto_pagina in paginas_con_texto:
             animales_pagina = _extraer_tabla_pdf_dinamica(texto_pagina, fincas_disponibles=fincas_disponibles)
@@ -826,7 +900,6 @@ def procesar_importacion_lote(
             todos_los_animales.extend(animales_pagina)
 
         if not todos_los_animales:
-            texto_acumulado = "\n\n".join(paginas_con_texto)
             res_local = _extraer_lote_regex(texto_acumulado, fincas_disponibles=fincas_disponibles)
             if res_local.get("animales"):
                 return {

@@ -132,3 +132,80 @@ class DynamicPDFParserTestCase(TestCase):
         self.assertNotEqual(a2["crotal"], "2024")
         self.assertEqual(a2["fecha_nacimiento"], "2024-01-01")
         self.assertIsNone(a2["crotal_madre"])
+
+    def test_censo_oficial_92_animales_con_duplicado_fila_78(self):
+        """
+        Verifica la extracción determinista de exactamente 92 animales a lo largo de 3 páginas de PDF,
+        descartando metadatos y detectando que el único duplicado es el crotal 1001 en la fila 78.
+        """
+        from ganaderia.models import Explotacion, Finca, Ubicacion
+        from django.urls import reverse
+
+        explotacion = Explotacion.objects.create(nombre="Explotación 92 Test", codigo_rega="ES929292929292")
+        finca = Finca.objects.create(explotacion=explotacion, nombre="Finca 92")
+        Ubicacion.objects.create(finca=finca, tipo_ubicacion="PASTO")
+
+        # Construir el documento de 3 páginas
+        lineas_p1 = [
+            "LIBRO DE REGISTRO OFICIAL - EXPLOTACIÓN GANADERA",
+            "MODELO OCA / SITRAN - CENSO BOVINO OFICIAL",
+            "Fecha de emisión: 03/10/2026",
+            "",
+            "Nº | Crotal (4D) | Sexo | F. Nacimiento | Raza | Madre | Ubicación | Observaciones",
+            "01 | 1001 | H | 12/03/2018 | Limusina | Fundadora | PASTO | -"
+        ]
+        for i in range(2, 36):
+            c_str = str(1000 + i)
+            lineas_p1.append(f"{i:02d} | {c_str} | H | 15/05/2019 | Limusina | Fundadora | PASTO | -")
+        lineas_p1.append("Página 1 de 3")
+
+        lineas_p2 = [
+            "--- PÁGINA 2 ---",
+            "LISTADO OFICIAL DE CENSO (CONTINUACIÓN)",
+        ]
+        for i in range(36, 71):
+            c_str = str(1000 + i)
+            lineas_p2.append(f"{i:02d} | {c_str} | M | 20/06/2020 | Retinta | 1001 | CEBADERO | -")
+        lineas_p2.append("Página 2 de 3")
+
+        lineas_p3 = [
+            "--- PÁGINA 3 ---",
+            "LISTADO OFICIAL DE CENSO (CONTINUACIÓN)",
+        ]
+        for i in range(71, 93):
+            if i == 78:
+                # Fila 78: Duplicado real del crotal 1001
+                lineas_p3.append("78 | 1001 | H | 10/10/2025 | Limusina | 1002 | PASTO | Duplicado")
+            else:
+                c_str = str(1000 + i)
+                lineas_p3.append(f"{i:02d} | {c_str} | H | 01/01/2021 | Charolesa | - | PASTO | -")
+        lineas_p3.append("TOTAL ANIMALES EN CENSO: 92")
+        lineas_p3.append("FIRMA DEL TITULAR Y VETERINARIO OFICIAL")
+        lineas_p3.append("Página 3 de 3")
+
+        texto_completo = "\n".join(lineas_p1 + lineas_p2 + lineas_p3)
+
+        # 1. Extracción determinista
+        animales = _extraer_tabla_pdf_dinamica(texto_completo)
+        self.assertEqual(len(animales), 92)
+
+        # Primer animal (Fila 01)
+        self.assertEqual(animales[0]["crotal"], "1001")
+        self.assertEqual(animales[0]["sexo"], "H")
+        self.assertEqual(animales[0]["fecha_nacimiento"], "2018-03-12")
+        self.assertIsNone(animales[0]["crotal_madre"])
+
+        # Fila 78 (índice 77)
+        self.assertEqual(animales[77]["crotal"], "1001")
+        self.assertEqual(animales[77]["fecha_nacimiento"], "2025-10-10")
+        self.assertEqual(animales[77]["crotal_madre"], "1002")
+
+        # 2. Vista preview en lote
+        url_preview = reverse('asistente_lote_preview')
+        response = self.client.post(url_preview, {'texto': texto_completo})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['total_animales'], 92)
+        self.assertEqual(response.context['total_validos'], 91)
+        self.assertEqual(response.context['total_duplicados'], 1)
+        self.assertEqual(response.context['crotales_duplicados_str'], "1001")
+        self.assertContains(response, "Total a importar: <strong><span id=\"lote-count-total\">91</span> animales válidos</strong> (1 duplicado detectado: 1001) de 92 detectados.")

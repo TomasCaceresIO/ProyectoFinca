@@ -26,8 +26,7 @@
                     <div>
                         <strong style="color: #0f172a; font-size: 0.95rem;">Resumen del Lote Extraído:</strong>
                         <div style="color: #475569; font-size: 0.85rem; margin-top: 0.25rem;">
-                            Total a importar: <strong><span id="lote-count-total">{{ total_validos }}</span> animales</strong> 
-                            ({{ total_hembras }} hembras, {{ total_machos }} machos) de {{ total_animales }} detectados.
+                            Total a importar: <strong><span id="lote-count-total">{{ total_validos }}</span> animales válidos</strong>{% if total_duplicados %} ({{ total_duplicados }} duplicado{% if total_duplicados > 1 %}s{% endif %} detectado{% if total_duplicados > 1 %}s{% endif %}: {{ crotales_duplicados_str }}){% endif %} de {{ total_animales }} detectados.
                         </div>
                     </div>
                     
