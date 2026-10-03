@@ -22,12 +22,13 @@ RUN pip install --no-cache-dir -r requirements-prod.txt
 # Copiar el resto del código del proyecto
 COPY . /app/
 
-# Crear directorios para archivos estáticos y de media
-RUN mkdir -p /app/staticfiles /app/media
-
 # Crear usuario de sistema no-root por seguridad con home dir válido
-RUN useradd -m -d /home/appuser -s /bin/bash appuser && \
-    chown -R appuser:appuser /app /home/appuser
+RUN useradd -m -d /home/appuser -s /bin/bash appuser
+
+# Crear explícitamente directorios de estáticos y media con propiedad total para appuser
+RUN mkdir -p /app/staticfiles /app/media && \
+    chown -R appuser:appuser /app /home/appuser && \
+    chmod -R 775 /app/staticfiles /app/media
 
 # Otorgar permisos de ejecución al entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
