@@ -675,51 +675,20 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
     }
 
 
-def procesar_importacion_lote(
-    texto: Optional[str] = None,
-    archivo_bytes: Optional[bytes] = None,
-    mime_type: str = "application/pdf",
+def _extraer_animales_de_texto(
+    client: Groq,
+    texto_chunk: str,
     fincas_disponibles: Optional[List[str]] = None
-) -> Dict[str, Any]:
-    """Procesa un PDF o texto de entrada mediante Groq Llama-3.3-70B y retorna los animales parseados."""
-    texto_extraido_pdf = ""
-    if archivo_bytes:
-        texto_extraido_pdf = extraer_texto_de_pdf(archivo_bytes)
-        if not texto_extraido_pdf.strip():
-            return {
-                "intencion": "IMPORTAR_LOTE",
-                "finca_nombre": None,
-                "error": "No se pudo extraer texto digital del documento PDF adjunto. Compruebe que no sea un archivo escaneado sin OCR.",
-                "animales": []
-            }
-
-    texto_a_procesar = texto_extraido_pdf if texto_extraido_pdf else (texto.strip() if texto else "")
-
-    if not texto_a_procesar:
-        return {
-            "intencion": "IMPORTAR_LOTE",
-            "finca_nombre": None,
-            "error": "No se proporcionó ningún texto o documento para procesar.",
-            "animales": []
-        }
-
-    client = get_groq_client()
-    if not client:
-        res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
-        if res_local.get("animales"):
-            return {
-                "intencion": "IMPORTAR_LOTE",
-                "finca_nombre": res_local.get("finca_nombre"),
-                "animales": res_local["animales"],
-                "error": None,
-                "aviso_banner": "El censo fue procesado mediante el analizador local."
-            }
-        return {
-            "intencion": "IMPORTAR_LOTE",
-            "finca_nombre": None,
-            "error": "El servicio de IA requiere configurar la variable GROQ_API_KEY en el entorno.",
-            "animales": []
-        }
+) -> List[Dict[str, Any]]:
+    """
+    Invoca a client.chat.completions.create con model="llama-3.1-8b-instant" y response_format={"type": "json_object"}.
+    Utiliza max_completion_tokens=4096 y temperature=0.1.
+    Mantiene la sanitización de crotales (.zfill(4)), validación de sexo (H/M) y asignación de crotal_madre
+    (null si es Fundadora o contiene número si es hija).
+    Itera sobre GROQ_MODELS en caso de error 404 (NotFoundError).
+    """
+    if not texto_chunk or not texto_chunk.strip():
+        return []
 
     datos = None
     ultimo_error = None
@@ -731,7 +700,7 @@ def procesar_importacion_lote(
                     {"role": "system", "content": SYSTEM_PROMPT_CENSO},
                     {
                         "role": "user",
-                        "content": f"Extrae todos los animales del siguiente contenido respetando rigurosamente las instrucciones:\n\n{texto_a_procesar}"
+                        "content": f"Extrae todos los animales del siguiente contenido respetando rigurosamente las instrucciones:\n\n{texto_chunk.strip()}"
                     }
                 ],
                 model=modelo,
@@ -742,35 +711,18 @@ def procesar_importacion_lote(
 
             respuesta_raw = chat_completion.choices[0].message.content
             datos = json.loads(respuesta_raw)
-            if datos:
+            if datos and "animales" in datos:
                 break
         except (NotFoundError, Exception) as e:
             ultimo_error = e
-            logger.warning(f"Error con modelo {modelo} en Groq: {e}. Probando siguiente modelo de la cadena de fallback.")
+            logger.warning(f"Error con modelo {modelo} en chunk de texto Groq: {e}. Probando siguiente modelo...")
             continue
 
-    if datos is None:
-        logger.error(f"Todos los modelos de Groq fallaron en procesar_importacion_lote. Último error: {ultimo_error}")
-        if texto_a_procesar:
-            res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
-            if res_local.get("animales"):
-                return {
-                    "intencion": "IMPORTAR_LOTE",
-                    "finca_nombre": res_local.get("finca_nombre"),
-                    "animales": res_local["animales"],
-                    "error": None,
-                    "aviso_banner": "El censo fue procesado mediante el analizador local debido a una saturación temporal de la IA."
-                }
-
-        return {
-            "intencion": "IMPORTAR_LOTE",
-            "finca_nombre": None,
-            "error": f"Error en el motor de IA (Groq): {str(ultimo_error)}",
-            "animales": []
-        }
+    if datos is None or not datos.get("animales"):
+        logger.warning(f"No se pudieron extraer animales con Groq en el chunk ({ultimo_error}).")
+        return []
 
     animales_extraidos = datos.get("animales", [])
-
     animales_limpios = []
     for a in animales_extraidos:
         crotal_str = str(a.get("crotal", "")).strip().zfill(4)
@@ -797,9 +749,138 @@ def procesar_importacion_lote(
 
             animales_limpios.append(a)
 
+    return animales_limpios
+
+
+def procesar_importacion_lote(
+    texto: Optional[str] = None,
+    archivo_bytes: Optional[bytes] = None,
+    mime_type: str = "application/pdf",
+    fincas_disponibles: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Procesa un PDF o texto de entrada mediante Groq Llama-3.1-8b-instant y retorna los animales parseados.
+    Si se recibe un archivo PDF (archivo_bytes), itera individualmente sobre cada página
+    utilizando PdfReader para evitar el truncamiento por límite de tokens de salida (ej. censos de 92 animales).
+    """
+    client = get_groq_client()
+
+    # 1. Si se recibe un archivo PDF
+    if archivo_bytes:
+        reader = None
+        try:
+            reader = PdfReader(io.BytesIO(archivo_bytes))
+        except Exception as e:
+            logger.error(f"Error abriendo PDF con pypdf: {e}")
+
+        if not reader or not reader.pages:
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": None,
+                "error": "No se pudo extraer texto digital del documento PDF adjunto. Compruebe que no sea un archivo escaneado sin OCR.",
+                "animales": []
+            }
+
+        paginas_con_texto = []
+        for idx, page in enumerate(reader.pages):
+            txt = page.extract_text() or ""
+            if txt.strip():
+                paginas_con_texto.append(txt)
+
+        if not paginas_con_texto:
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": None,
+                "error": "No se pudo extraer texto digital del documento PDF adjunto. Compruebe que no sea un archivo escaneado sin OCR.",
+                "animales": []
+            }
+
+        # Sin cliente Groq configurado: fallback local
+        if not client:
+            texto_acumulado = "\n\n".join(paginas_con_texto)
+            res_local = _extraer_lote_regex(texto_acumulado, fincas_disponibles=fincas_disponibles)
+            if res_local.get("animales"):
+                return {
+                    "intencion": "IMPORTAR_LOTE",
+                    "finca_nombre": res_local.get("finca_nombre"),
+                    "animales": res_local["animales"],
+                    "error": None,
+                    "aviso_banner": "El censo fue procesado mediante el analizador local."
+                }
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": None,
+                "error": "El servicio de IA requiere configurar la variable GROQ_API_KEY en el entorno.",
+                "animales": []
+            }
+
+        # Procesamiento página a página con Groq
+        todos_los_animales = []
+        for texto_pagina in paginas_con_texto:
+            animales_pagina = _extraer_animales_de_texto(client, texto_pagina, fincas_disponibles=fincas_disponibles)
+            todos_los_animales.extend(animales_pagina)
+
+        if not todos_los_animales:
+            texto_acumulado = "\n\n".join(paginas_con_texto)
+            res_local = _extraer_lote_regex(texto_acumulado, fincas_disponibles=fincas_disponibles)
+            if res_local.get("animales"):
+                return {
+                    "intencion": "IMPORTAR_LOTE",
+                    "finca_nombre": res_local.get("finca_nombre"),
+                    "animales": res_local["animales"],
+                    "error": None,
+                    "aviso_banner": "El censo fue procesado mediante el analizador local debido a una saturación temporal de la IA."
+                }
+
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": None,
+            "animales": todos_los_animales,
+            "error": None
+        }
+
+    # 2. Si se recibe solo una cadena de texto (texto), llamada estándar en una sola pasada
+    texto_a_procesar = (texto or "").strip()
+    if not texto_a_procesar:
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": None,
+            "error": "No se proporcionó ningún texto o documento para procesar.",
+            "animales": []
+        }
+
+    if not client:
+        res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
+        if res_local.get("animales"):
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": res_local.get("finca_nombre"),
+                "animales": res_local["animales"],
+                "error": None,
+                "aviso_banner": "El censo fue procesado mediante el analizador local."
+            }
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": None,
+            "error": "El servicio de IA requiere configurar la variable GROQ_API_KEY en el entorno.",
+            "animales": []
+        }
+
+    animales_extraidos = _extraer_animales_de_texto(client, texto_a_procesar, fincas_disponibles=fincas_disponibles)
+    if not animales_extraidos:
+        res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
+        if res_local.get("animales"):
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": res_local.get("finca_nombre"),
+                "animales": res_local["animales"],
+                "error": None,
+                "aviso_banner": "El censo fue procesado mediante el analizador local debido a una saturación temporal de la IA."
+            }
+
     return {
         "intencion": "IMPORTAR_LOTE",
-        "finca_nombre": datos.get("finca_nombre"),
-        "animales": animales_limpios,
+        "finca_nombre": None,
+        "animales": animales_extraidos,
         "error": None
     }

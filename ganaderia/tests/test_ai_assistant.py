@@ -227,6 +227,43 @@ class AIAssistantTestCase(TestCase):
         self.assertEqual(a3["sexo"], "H")
         self.assertIsNone(a3["crotal_madre"])
 
+    @override_settings(GROQ_API_KEY="test-fake-key")
+    @patch("ganaderia.services.ai_assistant.PdfReader")
+    @patch("ganaderia.services.ai_assistant.Groq")
+    def test_lote_importacion_multipagina_chunking_pdf(self, mock_groq_class, mock_pdf_reader_cls):
+        """Verifica que un PDF de múltiples páginas se procesa página por página sin truncamiento y consolida los animales."""
+        mock_p1 = MagicMock()
+        mock_p1.extract_text.return_value = "Página 1: 1001 H Limusina | 1002 M Retinta"
+        mock_p2 = MagicMock()
+        mock_p2.extract_text.return_value = "Página 2: 1003 H Charolesa | 1004 M Limusina"
+
+        mock_reader_inst = MagicMock()
+        mock_reader_inst.pages = [mock_p1, mock_p2]
+        mock_pdf_reader_cls.return_value = mock_reader_inst
+
+        resp_p1 = MagicMock()
+        resp_p1.choices = [MagicMock(message=MagicMock(content='''{"animales": [
+            {"crotal": "1001", "sexo": "H", "raza": "Limusina", "crotal_madre": null, "sub_ubicacion": "PASTO"},
+            {"crotal": "1002", "sexo": "M", "raza": "Retinta", "crotal_madre": "1001", "sub_ubicacion": "PASTO"}
+        ]}'''))]
+
+        resp_p2 = MagicMock()
+        resp_p2.choices = [MagicMock(message=MagicMock(content='''{"animales": [
+            {"crotal": "1003", "sexo": "H", "raza": "Charolesa", "crotal_madre": null, "sub_ubicacion": "PASTO"},
+            {"crotal": "1004", "sexo": "M", "raza": "Limusina", "crotal_madre": "1003", "sub_ubicacion": "PASTO"}
+        ]}'''))]
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.side_effect = [resp_p1, resp_p2]
+        mock_groq_class.return_value = mock_client
+
+        resultado = procesar_importacion_lote(archivo_bytes=b"%PDF-1.4 dummy multi-page")
+        self.assertIsNone(resultado["error"])
+        self.assertEqual(len(resultado["animales"]), 4)
+        crotales = [a["crotal"] for a in resultado["animales"]]
+        self.assertEqual(crotales, ["1001", "1002", "1003", "1004"])
+        self.assertEqual(mock_client.chat.completions.create.call_count, 2)
+
     def test_preview_detecta_conflicto_270_dias_sin_tocar_bd(self):
         """3. Test preview con conflicto < 270 días: devuelve alerta roja y NO modifica la base de datos."""
         # Registramos un parto hace 100 días para la vaca 3014

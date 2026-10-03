@@ -100,6 +100,44 @@ class LoteImportAndFundadoresTestCase(TestCase):
         self.assertContains(res, "4002")
         self.assertContains(res, "Válido")
 
+    def test_ai_import_lote_detecta_duplicidad_interna_del_propio_lote(self):
+        """
+        Verifica que al procesar un lote con un crotal repetido internamente (ej. crotal 1001 en fila 01
+        y crotal 1001 repetido más adelante), el primero es válido y el segundo se marca en rojo
+        por duplicidad interna ('Crotal repetido dentro del mismo lote') con checkbox deshabilitado.
+        """
+        with patch('ganaderia.views.procesar_importacion_lote') as mock_proc:
+            mock_proc.return_value = {
+                'intencion': 'IMPORTAR_LOTE',
+                'finca_nombre': 'Finca Montealto',
+                'animales': [
+                    {'crotal': '1001', 'sexo': 'H', 'raza': 'Limusina', 'fecha_nacimiento': '2018-05-10', 'crotal_madre': None, 'sub_ubicacion': 'PASTO'},
+                    {'crotal': '1002', 'sexo': 'M', 'raza': 'Retinta', 'fecha_nacimiento': '2020-03-15', 'crotal_madre': '1001', 'sub_ubicacion': 'PASTO'},
+                    {'crotal': '1001', 'sexo': 'H', 'raza': 'Limusina', 'fecha_nacimiento': '2025-10-10', 'crotal_madre': '1002', 'sub_ubicacion': 'PASTO'},
+                ],
+                'error': None
+            }
+
+            res = self.client.post(reverse('asistente_lote_preview'), {'texto': 'lote simulado con duplicado'})
+            self.assertEqual(res.status_code, 200)
+            self.assertContains(res, "Crotal repetido dentro del mismo lote")
+
+            animales_eval = res.context['animales']
+            self.assertEqual(len(animales_eval), 3)
+
+            # Primer 1001: Válido
+            self.assertTrue(animales_eval[0]['es_valido'])
+            self.assertEqual(animales_eval[0]['crotal'], '1001')
+            self.assertIsNone(animales_eval[0]['error'])
+
+            # Segundo 1002: Válido
+            self.assertTrue(animales_eval[1]['es_valido'])
+
+            # Tercero (repetido 1001): Inválido
+            self.assertFalse(animales_eval[2]['es_valido'])
+            self.assertEqual(animales_eval[2]['crotal'], '1001')
+            self.assertEqual(animales_eval[2]['error'], "Crotal repetido dentro del mismo lote")
+
     def test_ejecucion_lote_atomica(self):
         """
         4. Confirmar la importación de 5 animales simultáneos y verificar
