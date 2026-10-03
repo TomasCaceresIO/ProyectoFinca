@@ -7,7 +7,14 @@ from django.db import IntegrityError
 from django.urls import reverse
 from django.utils import timezone
 from ganaderia.models import Explotacion, Finca, Animal, Ubicacion
-from ganaderia.services.ai_assistant import normalizar_crotal, procesar_comando_parto
+from ganaderia.services.ai_assistant import (
+    normalizar_crotal,
+    procesar_comando_parto,
+    procesar_importacion_lote,
+    CANDIDATE_MODELS,
+    DEFAULT_GEMINI_MODEL,
+    genai_errors,
+)
 
 
 class ResilienceAndScaleTestCase(TransactionTestCase):
@@ -165,3 +172,56 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
             self.assertEqual(resultado["cria_sexo"], "H")
             self.assertEqual(resultado["cria_raza"], "Limusina")
             self.assertNotIn("error", resultado)
+
+    @override_settings(GEMINI_API_KEY='test_api_key_503')
+    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
+    def test_fallback_ladder_conmuta_tras_503(self, mock_sleep):
+        """
+        5. Escalera de modelos de respaldo:
+        Si el modelo principal falla con 503 (High demand), conmuta al siguiente modelo candidato
+        y tiene éxito sin elevar error 500 al cliente.
+        """
+        intentos = []
+
+        def simular_llamada(*args, **kwargs):
+            modelo = kwargs.get('model')
+            intentos.append(modelo)
+            if modelo == DEFAULT_GEMINI_MODEL:
+                # Simular error 503 de saturación de servidores
+                raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'The model is overloaded. Please try again later.'}})
+            # El segundo modelo candidato responde con éxito
+            return {
+                "intencion": "REGISTRAR_PARTO",
+                "crotal_madre": "3014",
+                "fecha_parto": "2026-10-02",
+                "cria_crotal": "5012",
+                "cria_sexo": "H",
+                "cria_raza": "Limusina",
+                "cria_recinto": "PASTO",
+                "cria_finca": None,
+            }
+
+        with patch('ganaderia.services.ai_assistant._llamar_gemini', side_effect=simular_llamada):
+            resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
+            self.assertEqual(resultado["crotal_madre"], "3014")
+            self.assertEqual(resultado["cria_crotal"], "5012")
+            # Debe haber intentado primero con DEFAULT_GEMINI_MODEL y luego con el primer candidato
+            self.assertIn(DEFAULT_GEMINI_MODEL, intentos)
+            self.assertIn(CANDIDATE_MODELS[0], intentos)
+
+    @override_settings(GEMINI_API_KEY='test_api_key_503_global')
+    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
+    def test_lote_preview_mensaje_amigable_saturacion(self, mock_sleep):
+        """
+        6. Mensaje amigable al usuario en /asistente/lote-preview/ si todos los modelos devuelven 503.
+        """
+        def simular_503_todos(*args, **kwargs):
+            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
+
+        with patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503_todos):
+            from django.core.files.uploadedfile import SimpleUploadedFile
+            pdf_dummy = SimpleUploadedFile("censo.pdf", b"%PDF-1.4 dummy", content_type="application/pdf")
+            client = Client()
+            res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_dummy})
+            self.assertEqual(res.status_code, 200)
+            self.assertContains(res, "Los servidores de Google AI están experimentando un pico de saturación temporal")

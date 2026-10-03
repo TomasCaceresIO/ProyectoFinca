@@ -966,13 +966,19 @@ def asistente_lote_preview(request):
         else:
             datos = procesar_importacion_lote(texto=texto, fincas_disponibles=nombres_fincas)
     except Exception as e:
+        error_msg = str(e)
+        if any(term in error_msg.lower() for term in ("503", "429", "saturación", "unavailable", "high demand")):
+            error_msg = "Los servidores de Google AI están experimentando un pico de saturación temporal. Por favor, reintenta la subida del documento en unos instantes."
         return render(request, 'ganaderia/partials/ai_lote_preview_modal.html', {
-            'error_general': f"Error al procesar la importación masiva: {str(e)}"
+            'error_general': error_msg
         })
 
     if datos.get('error'):
+        error_msg = datos['error']
+        if any(term in error_msg.lower() for term in ("503", "429", "saturación", "unavailable", "high demand")):
+            error_msg = "Los servidores de Google AI están experimentando un pico de saturación temporal. Por favor, reintenta la subida del documento en unos instantes."
         return render(request, 'ganaderia/partials/ai_lote_preview_modal.html', {
-            'error_general': datos['error'],
+            'error_general': error_msg,
             'datos': datos,
         })
 
