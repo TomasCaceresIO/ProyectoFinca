@@ -28,8 +28,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return cookieValue;
     }
 
-    // Obtener token CSRF desde cookie o input del DOM
-    function getCsrfToken() {
+    // Obtener token CSRF priorizando la meta-tag
+    function getCSRFToken() {
+        const metaTag = document.querySelector('meta[name="csrf-token"]');
+        if (metaTag && metaTag.content) {
+            return metaTag.content;
+        }
         return getCookie('csrftoken') || document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
     }
 
@@ -46,7 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalText = btnSubmit.innerHTML;
         btnSubmit.innerHTML = '⏳ Analizando orden...';
 
-        const token = getCsrfToken();
+        const token = getCSRFToken();
         if (data instanceof FormData && token && !data.has('csrfmiddlewaretoken')) {
             data.append('csrfmiddlewaretoken', token);
         }
@@ -105,7 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const formData = new FormData();
         formData.append('texto', texto);
-        formData.append('csrfmiddlewaretoken', getCsrfToken());
+        formData.append('csrfmiddlewaretoken', getCSRFToken());
         enviarComando(formData);
     }
 
@@ -222,7 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
                     const formData = new FormData();
                     formData.append('audio', audioBlob, 'grabacion.webm');
-                    formData.append('csrfmiddlewaretoken', getCsrfToken());
+                    formData.append('csrfmiddlewaretoken', getCSRFToken());
                     enviarComando(formData);
                 };
 

@@ -100,8 +100,14 @@ class FincaDeletionAndExportTestCase(TestCase):
         self.assertEqual(res['Content-Type'], 'text/csv; charset=utf-8')
         self.assertIn('censo_ganadero_', res['Content-Disposition'])
 
-        content = res.content.decode('utf-8-sig')
-        lines = content.strip().split('\r\n')
+        # Si es StreamingHttpResponse, consumir streaming_content
+        if hasattr(res, 'streaming_content'):
+            chunks = list(res.streaming_content)
+            content = b''.join(c.encode('utf-8') if isinstance(c, str) else c for c in chunks).decode('utf-8-sig')
+        else:
+            content = res.content.decode('utf-8-sig')
+
+        lines = [line for line in content.strip().splitlines() if line]
         self.assertTrue(len(lines) >= 2)
         self.assertIn('Crotal;Sexo;Raza', lines[0])
 
