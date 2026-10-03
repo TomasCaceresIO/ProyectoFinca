@@ -23,7 +23,7 @@ environ.Env.read_env(BASE_DIR / '.env')
 SECRET_KEY = env('SECRET_KEY')
 DEBUG = env('DEBUG')
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['localhost', '127.0.0.1'])
-GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
+GEMINI_API_KEY = env('GEMINI_API_KEY', default='').strip()
 
 
 # --- APLICACIONES ---

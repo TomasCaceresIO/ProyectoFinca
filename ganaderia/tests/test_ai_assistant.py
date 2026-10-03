@@ -4,7 +4,12 @@ from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Incidencia, Ubicacion
-from ganaderia.services.ai_assistant import procesar_comando_parto, _extraer_comando_parto_regex
+from ganaderia.services.ai_assistant import (
+    procesar_comando_parto,
+    _extraer_comando_parto_regex,
+    get_genai_client,
+    DEFAULT_GEMINI_MODEL,
+)
 from ganaderia.services.animal_services import registrar_parto
 
 
@@ -110,6 +115,21 @@ class AIAssistantTestCase(TestCase):
         self.assertEqual(resultado["cria_sexo"], "H")
         self.assertEqual(resultado["cria_raza"], "Limusina")
         self.assertEqual(resultado["fecha_parto"], "2026-10-02")
+        # Verificar que se invocó con el modelo oficial gemini-3.8-flash
+        call_kwargs = mock_client.models.generate_content.call_args.kwargs
+        self.assertEqual(call_kwargs["model"], DEFAULT_GEMINI_MODEL)
+        self.assertEqual(DEFAULT_GEMINI_MODEL, "gemini-3.8-flash")
+
+    @override_settings(GEMINI_API_KEY="AQ_MOCK_KEY_FOR_TESTING_PURPOSES")
+    @patch("ganaderia.services.ai_assistant.genai.Client")
+    def test_client_accepts_aq_prefixed_token(self, mock_client_class):
+        """Test unitario: autenticación con tokens de nuevo formato 'AQ.' inicializa el cliente sin error."""
+        mock_client_instance = MagicMock()
+        mock_client_class.return_value = mock_client_instance
+
+        client = get_genai_client()
+        self.assertIsNotNone(client)
+        mock_client_class.assert_called_once_with(api_key="AQ_MOCK_KEY_FOR_TESTING_PURPOSES")
 
     def test_preview_detecta_conflicto_270_dias_sin_tocar_bd(self):
         """3. Test preview con conflicto < 270 días: devuelve alerta roja y NO modifica la base de datos."""

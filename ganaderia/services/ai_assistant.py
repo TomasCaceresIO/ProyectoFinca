@@ -17,6 +17,22 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+
+
+def get_genai_client():
+    """
+    Inicializa el cliente oficial de Google GenAI flexibilizando la clave de API.
+    Acepta tanto las API Keys estándar (ej. AIza...) como los nuevos tokens con prefijo 'AQ.'
+    sin comprobaciones rígidas de longitud o formato.
+    """
+    if genai is None:
+        return None
+    api_key = getattr(settings, 'GEMINI_API_KEY', '').strip()
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
 
 class AnimalImportItem(BaseModel):
     crotal: str = Field(description="Crotal obligatorio de 4 dígitos numéricos (ej. '4001', '0015').")
@@ -348,8 +364,9 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
     if genai is None or types is None:
         raise ImportError("El paquete google-genai no está disponible.")
 
-    api_key = getattr(settings, 'GEMINI_API_KEY', '')
-    client = genai.Client(api_key=api_key)
+    client = get_genai_client()
+    if client is None:
+        raise ValueError("Clave GEMINI_API_KEY no configurada o vacía.")
 
     hoy = timezone.now().date()
     hoy_iso = hoy.strftime('%Y-%m-%d')
@@ -391,7 +408,7 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
         contents = str(texto_o_audio)
 
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model=DEFAULT_GEMINI_MODEL,
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -582,12 +599,13 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
 
 
 def _llamar_gemini_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None) -> dict:
-    """Invoca Gemini 2.5 Flash para extraer estructuradamente un lote de animales desde PDF o texto."""
+    """Invoca Gemini oficial para extraer estructuradamente un lote de animales desde PDF o texto."""
     if genai is None or types is None:
         raise ImportError("El paquete google-genai no está disponible.")
 
-    api_key = getattr(settings, 'GEMINI_API_KEY', '')
-    client = genai.Client(api_key=api_key)
+    client = get_genai_client()
+    if client is None:
+        raise ValueError("Clave GEMINI_API_KEY no configurada o vacía.")
 
     hoy = timezone.now().date()
     hoy_iso = hoy.strftime('%Y-%m-%d')
@@ -616,7 +634,7 @@ def _llamar_gemini_lote(texto=None, archivo_bytes=None, mime_type='application/p
         contents.append(str(texto))
 
     response = client.models.generate_content(
-        model='gemini-2.5-flash',
+        model=DEFAULT_GEMINI_MODEL,
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
