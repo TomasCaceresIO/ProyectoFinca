@@ -178,7 +178,8 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
     def test_fallback_ladder_conmuta_tras_503(self, mock_sleep):
         """
         5. Escalera de modelos de respaldo:
-        Si el modelo principal falla con 503 (High demand), conmuta al siguiente modelo candidato
+        Si el modelo principal falla con 503 (High demand) agotando los reintentos,
+        o falla con 404 (salto inmediato), conmuta al siguiente modelo candidato
         y tiene éxito sin elevar error 500 al cliente.
         """
         intentos = []
@@ -205,23 +206,91 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
             resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
             self.assertEqual(resultado["crotal_madre"], "3014")
             self.assertEqual(resultado["cria_crotal"], "5012")
-            # Debe haber intentado primero con DEFAULT_GEMINI_MODEL y luego con el primer candidato
-            self.assertIn(DEFAULT_GEMINI_MODEL, intentos)
-            self.assertIn(CANDIDATE_MODELS[0], intentos)
+            # Debe haber intentado con DEFAULT_GEMINI_MODEL (1 llamada + 3 reintentos = 4 veces)
+            # y luego con CANDIDATE_MODELS[1] ('gemini-3.8-pro')
+            self.assertEqual(intentos.count(DEFAULT_GEMINI_MODEL), 4)
+            self.assertIn("gemini-3.8-pro", intentos)
+
+    @override_settings(GEMINI_API_KEY='test_api_key_404')
+    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
+    def test_salto_inmediato_tras_404(self, mock_sleep):
+        """
+        6. Salto inmediato ante 404: si un modelo responde 404, no reintenta y pasa inmediatamente al siguiente.
+        """
+        intentos = []
+
+        def simular_llamada(*args, **kwargs):
+            modelo = kwargs.get('model')
+            intentos.append(modelo)
+            if modelo == DEFAULT_GEMINI_MODEL:
+                raise genai_errors.APIError(404, {'error': {'code': 404, 'message': 'models/gemini-3.8-flash is not found'}})
+            return {
+                "intencion": "REGISTRAR_PARTO",
+                "crotal_madre": "3014",
+                "fecha_parto": "2026-10-02",
+                "cria_crotal": "5012",
+                "cria_sexo": "H",
+                "cria_raza": "Limusina",
+                "cria_recinto": "PASTO",
+                "cria_finca": None,
+            }
+
+        with patch('ganaderia.services.ai_assistant._llamar_gemini', side_effect=simular_llamada):
+            resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
+            self.assertEqual(resultado["crotal_madre"], "3014")
+            # Con 404 solo debe llamarse 1 vez a DEFAULT_GEMINI_MODEL sin reintentos
+            self.assertEqual(intentos.count(DEFAULT_GEMINI_MODEL), 1)
+            self.assertIn("gemini-3.8-pro", intentos)
 
     @override_settings(GEMINI_API_KEY='test_api_key_503_global')
     @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
     def test_lote_preview_mensaje_amigable_saturacion(self, mock_sleep):
         """
-        6. Mensaje amigable al usuario en /asistente/lote-preview/ si todos los modelos devuelven 503.
+        7. Mensaje amigable al usuario en /asistente/lote-preview/ si todos los modelos devuelven 503
+        y no se puede extraer texto plano de un binario no parseable.
         """
         def simular_503_todos(*args, **kwargs):
             raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
 
         with patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503_todos):
             from django.core.files.uploadedfile import SimpleUploadedFile
-            pdf_dummy = SimpleUploadedFile("censo.pdf", b"%PDF-1.4 dummy", content_type="application/pdf")
+            pdf_dummy = SimpleUploadedFile("censo.pdf", b"DATOS_BINARIOS_INVALIDOS_SIN_TEXTO", content_type="application/pdf")
             client = Client()
             res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_dummy})
             self.assertEqual(res.status_code, 200)
             self.assertContains(res, "Los servidores de Google AI están experimentando un pico de saturación temporal")
+
+    @override_settings(GEMINI_API_KEY='test_api_key_pdf_fallback')
+    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
+    def test_pdf_extractor_local_y_fallback_regex(self, mock_sleep):
+        """
+        8. Si se recibe un PDF con texto útil y todos los modelos de Gemini devuelven 503,
+        el sistema ejecuta el analizador heurístico local (_extraer_lote_regex)
+        y muestra la lista de animales con el banner informativo de advertencia.
+        """
+        def simular_503_todos(*args, **kwargs):
+            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
+
+        # Crear un PDF sintético mínimo con pypdf
+        from pypdf import PdfWriter
+        import io
+        writer = PdfWriter()
+        writer.add_blank_page(width=200, height=200)
+        # Mock de PdfReader para simular extracción de texto útil
+        with patch('ganaderia.services.ai_assistant.PdfReader') as mock_reader_cls, \
+             patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503_todos):
+            mock_page = MagicMock()
+            mock_page.extract_text.return_value = "Animal 7001 macho limusin y 7002 hembra en pasto"
+            mock_instance = MagicMock()
+            mock_instance.pages = [mock_page]
+            mock_reader_cls.return_value = mock_instance
+
+            from django.core.files.uploadedfile import SimpleUploadedFile
+            pdf_file = SimpleUploadedFile("censo.pdf", b"%PDF-1.4 dummy", content_type="application/pdf")
+            client = Client()
+            res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_file})
+
+            self.assertEqual(res.status_code, 200)
+            self.assertContains(res, "7001")
+            self.assertContains(res, "7002")
+            self.assertContains(res, "El censo fue procesado mediante el analizador local debido a una saturación temporal")

@@ -1053,6 +1053,7 @@ def asistente_lote_preview(request):
         'total_validos': total_hembras + total_machos,
         'total_hembras': total_hembras,
         'total_machos': total_machos,
+        'aviso_banner': datos.get('aviso_banner'),
     })
 
 

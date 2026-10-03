@@ -18,13 +18,18 @@ except ImportError:
     types = None
     genai_errors = None
 
+import io
+try:
+    from pypdf import PdfReader
+except ImportError:
+    PdfReader = None
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 CANDIDATE_MODELS = [
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-    "gemini-2.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3.8-pro",
 ]
 
 
@@ -435,23 +440,31 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
     return res_dict
 
 
-def _es_error_reintentable_o_fallback(exc) -> bool:
-    """Comprueba si un error es candidato a reintento / cambio de modelo (503, 429, 404, unavailable)."""
-    if genai_errors and isinstance(exc, genai_errors.APIError):
-        code = getattr(exc, 'code', None)
-        if code in (503, 429, 404):
-            return True
-    # Comprobar texto o código de la excepción de forma defensiva
+def _clasificar_error_gemini(exc) -> tuple[bool, bool]:
+    """
+    Clasifica la excepción en (es_503, es_404_o_descartar).
+    - es_503: error 503 UNAVAILABLE / saturación (debe reintentarse hasta 3 veces con [2.0, 4.0, 6.0]s).
+    - es_404_o_descartar: error 404 NOT_FOUND u otro no reintentable en el mismo modelo (salto inmediato al siguiente).
+    """
+    code = getattr(exc, 'code', None)
     msg = str(exc).lower()
-    return any(term in msg for term in ("503", "429", "404", "high demand", "unavailable", "resource exhausted", "overloaded"))
+
+    if (code == 503) or any(term in msg for term in ("503", "high demand", "unavailable", "overloaded", "resource exhausted")):
+        return True, False
+    if (code == 404) or ("404" in msg and "not found" in msg):
+        return False, True
+    if code == 429:
+        return True, False
+    return False, False
 
 
 def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm', fincas_disponibles: list = None) -> dict:
     """
     Punto de entrada principal para el procesamiento de comandos de parto (texto o audio).
-    Itera sobre la escalera de modelos (DEFAULT_GEMINI_MODEL + CANDIDATE_MODELS) con reintentos
-    defensivos ante errores 503 (High Demand), 429 o 404. Si todos fallan, conmuta limpiamente
-    al fallback regex local o devuelve un mensaje de error amigable.
+    Itera sobre la escalera de modelos (DEFAULT_GEMINI_MODEL + CANDIDATE_MODELS).
+    - Ante 503 UNAVAILABLE: hasta 3 reintentos con esperas progresivas [2.0, 4.0, 6.0]s antes de abandonar el modelo.
+    - Ante 404 NOT_FOUND: no reintenta; salta inmediatamente al siguiente candidato.
+    - Si todos fallan, conmuta limpiamente al fallback regex local o devuelve mensaje amigable.
     """
     api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
     
@@ -460,8 +473,10 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
         last_exception = None
 
         for idx_m, modelo in enumerate(modelos_a_probar):
-            # Intentos por modelo: llamada inicial + reintentos con backoff
-            max_intentos = 3  # intento 0, reintento 1 (1s), reintento 2 (2s)
+            # 1 llamada inicial + hasta 3 reintentos en 503
+            delays_503 = [2.0, 4.0, 6.0]
+            max_intentos = 1 + len(delays_503)
+
             for intento in range(max_intentos):
                 try:
                     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -476,28 +491,29 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
                 except FuturesTimeoutError as e:
                     logger.warning(f"Timeout (8s) con modelo {modelo} en intento {intento + 1}.")
                     last_exception = e
-                    break  # En timeout no insistimos con el mismo modelo para evitar demoras excesivas
+                    break  # En timeout pasamos al siguiente candidato
                 except Exception as e:
                     last_exception = e
-                    if _es_error_reintentable_o_fallback(e):
-                        if intento < max_intentos - 1:
-                            espera = 1.0 if intento == 0 else 2.0
-                            logger.warning(
-                                f"Fallo transitorio {type(e).__name__} en modelo {modelo} (intento {intento + 1}): {e}. "
-                                f"Reintentando en {espera}s..."
-                            )
-                            time.sleep(espera)
-                            continue
-                        else:
-                            logger.warning(
-                                f"Modelo {modelo} agotó reintentos tras error ({e}). Saltando al siguiente modelo candidato."
-                            )
-                            # Pequeña pausa antes de descartar el modelo actual
-                            time.sleep(0.5)
-                            break
+                    es_503, es_404 = _clasificar_error_gemini(e)
+
+                    if es_404:
+                        logger.warning(f"Modelo {modelo} no encontrado (404 NOT_FOUND). Saltando inmediatamente al siguiente.")
+                        break
+
+                    if es_503 and intento < len(delays_503):
+                        espera = delays_503[intento]
+                        logger.warning(
+                            f"Servidor sobrecargado (503/429) en modelo {modelo} (intento {intento + 1}). "
+                            f"Reintentando en {espera}s..."
+                        )
+                        time.sleep(espera)
+                        continue
+                    elif es_503:
+                        logger.warning(f"Modelo {modelo} agotó los 3 reintentos en 503. Saltando al siguiente modelo candidato.")
+                        time.sleep(0.5)
+                        break
                     else:
-                        # Error no recuperable con reintento (p. ej. validación o deserialización)
-                        logger.warning(f"Error al invocar modelo {modelo} ({e}). Saltando al siguiente modelo.")
+                        logger.warning(f"Error no recuperable en modelo {modelo} ({e}). Saltando al siguiente candidato.")
                         break
 
         # Si todos los modelos de la escalera han fallado
@@ -705,25 +721,53 @@ def _llamar_gemini_lote(texto=None, archivo_bytes=None, mime_type='application/p
 def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None) -> dict:
     """
     Punto de entrada principal para importar lotes de animales (PDF oficial o texto/dictado).
-    Itera sobre la escalera de modelos (DEFAULT_GEMINI_MODEL + CANDIDATE_MODELS) con reintentos
-    defensivos ante errores 503 (High Demand), 429 o 404. Si todos fallan, conmuta limpiamente
-    al parser regex si hay texto o devuelve un mensaje de saturación para el usuario.
+    Estrategia híbrida de alta resiliencia:
+    1. Si es PDF, intenta extraer texto plano en local mediante pypdf. Si tiene contenido útil,
+       usa ese texto plano en lugar del archivo binario pesado.
+    2. Itera sobre CANDIDATE_MODELS con reintentos [2.0, 4.0, 6.0]s en 503 UNAVAILABLE
+       y salto inmediato en 404 NOT_FOUND.
+    3. Si todos los modelos fallan pero se dispone de texto extraído (o texto original),
+       ejecuta el parser heurístico local con un aviso banner explicativo.
     """
     api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
+
+    # 1. Extractor local de texto como primera opción si se recibe PDF
+    texto_extraido_pdf = ""
+    if archivo_bytes and PdfReader is not None:
+        try:
+            reader = PdfReader(io.BytesIO(archivo_bytes))
+            for page in reader.pages:
+                texto_extraido_pdf += (page.extract_text() or "") + "\n"
+            texto_extraido_pdf = texto_extraido_pdf.strip()
+            if texto_extraido_pdf:
+                logger.info(f"Texto extraído del PDF exitosamente ({len(texto_extraido_pdf)} caracteres). Se enviará como texto.")
+        except Exception as e:
+            logger.warning(f"No se pudo extraer texto plano del PDF: {e}")
+
+    # Determinar qué enviar al LLM: si tenemos texto_extraido_pdf, preferimos texto antes que binario
+    llm_texto = texto
+    llm_archivo_bytes = archivo_bytes
+    if texto_extraido_pdf:
+        llm_texto = texto_extraido_pdf
+        llm_archivo_bytes = None  # No enviar archivo pesado si ya tenemos el texto
+
+    texto_para_fallback = texto or texto_extraido_pdf
 
     if api_key.strip():
         modelos_a_probar = [DEFAULT_GEMINI_MODEL] + [m for m in CANDIDATE_MODELS if m != DEFAULT_GEMINI_MODEL]
         last_exception = None
 
         for idx_m, modelo in enumerate(modelos_a_probar):
-            max_intentos = 3  # llamada inicial + 2 reintentos
+            delays_503 = [2.0, 4.0, 6.0]
+            max_intentos = 1 + len(delays_503)
+
             for intento in range(max_intentos):
                 try:
                     with ThreadPoolExecutor(max_workers=1) as executor:
                         future = executor.submit(
                             _llamar_gemini_lote,
-                            texto=texto,
-                            archivo_bytes=archivo_bytes,
+                            texto=llm_texto,
+                            archivo_bytes=llm_archivo_bytes,
                             mime_type=mime_type,
                             fincas_disponibles=fincas_disponibles,
                             model=modelo
@@ -735,29 +779,38 @@ def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='applica
                     break
                 except Exception as e:
                     last_exception = e
-                    if _es_error_reintentable_o_fallback(e):
-                        if intento < max_intentos - 1:
-                            espera = 1.0 if intento == 0 else 2.0
-                            logger.warning(
-                                f"Fallo transitorio {type(e).__name__} en importación con modelo {modelo} (intento {intento + 1}): {e}. "
-                                f"Reintentando en {espera}s..."
-                            )
-                            time.sleep(espera)
-                            continue
-                        else:
-                            logger.warning(
-                                f"Modelo {modelo} agotó reintentos en importación ({e}). Saltando al siguiente modelo."
-                            )
-                            time.sleep(0.5)
-                            break
+                    es_503, es_404 = _clasificar_error_gemini(e)
+
+                    if es_404:
+                        logger.warning(f"Modelo {modelo} no encontrado (404 NOT_FOUND). Saltando inmediatamente al siguiente.")
+                        break
+
+                    if es_503 and intento < len(delays_503):
+                        espera = delays_503[intento]
+                        logger.warning(
+                            f"Servidor sobrecargado (503/429) en importación con modelo {modelo} (intento {intento + 1}). "
+                            f"Reintentando en {espera}s..."
+                        )
+                        time.sleep(espera)
+                        continue
+                    elif es_503:
+                        logger.warning(f"Modelo {modelo} agotó los 3 reintentos en 503. Saltando al siguiente modelo.")
+                        time.sleep(0.5)
+                        break
                     else:
-                        logger.warning(f"Error en importación con modelo {modelo} ({e}). Saltando al siguiente modelo.")
+                        logger.warning(f"Error no recuperable en modelo {modelo} ({e}). Saltando al siguiente candidato.")
                         break
 
         # Fallback si todos los modelos fallaron
         logger.warning(f"Todos los modelos fallaron para importación de lote. Último error: {last_exception}.")
-        if texto:
-            return _extraer_lote_regex(texto, fincas_disponibles=fincas_disponibles)
+        if texto_para_fallback:
+            res_local = _extraer_lote_regex(texto_para_fallback, fincas_disponibles=fincas_disponibles)
+            if res_local.get('animales'):
+                res_local['aviso_banner'] = (
+                    "⚠️ El censo fue procesado mediante el analizador local debido a una saturación temporal "
+                    "en los servidores de IA. Revise la lista antes de guardar."
+                )
+                return res_local
         return {
             "intencion": "IMPORTAR_LOTE",
             "finca_nombre": None,
@@ -766,8 +819,8 @@ def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='applica
         }
 
     # Modo sin API key
-    if texto:
-        return _extraer_lote_regex(texto, fincas_disponibles=fincas_disponibles)
+    if texto_para_fallback:
+        return _extraer_lote_regex(texto_para_fallback, fincas_disponibles=fincas_disponibles)
 
     return {
         "intencion": "IMPORTAR_LOTE",
