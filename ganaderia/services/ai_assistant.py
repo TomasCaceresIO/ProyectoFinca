@@ -7,17 +7,19 @@ from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from django.conf import settings
 from django.utils import timezone
-from groq import Groq
+from groq import Groq, NotFoundError
 from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
 
-GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
-DEFAULT_GROQ_MODEL = GROQ_DEFAULT_MODEL
-CANDIDATE_MODELS = [
-    "llama-3.3-70b-versatile",
-    "llama-3.1-8b-instant",
+GROQ_MODELS = [
+    "llama-3.1-8b-instant",       # Modelo principal 100% gratuito y activo en todas las cuentas
+    "qwen/qwen3.8-27b",           # Modelo alternativo gratuito de alta capacidad
+    "llama-3.3-70b-versatile",    # Respaldo si la cuenta tiene permiso
 ]
+GROQ_DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_GROQ_MODEL = GROQ_DEFAULT_MODEL
+CANDIDATE_MODELS = GROQ_MODELS
 
 
 def get_groq_client() -> Optional[Groq]:
@@ -393,23 +395,28 @@ def procesar_comando_parto(
 ) -> dict:
     """
     Procesa un comando de voz o texto para registrar un parto.
-    Intenta procesar mediante Groq Llama-3.3-70B con modo JSON nativo.
-    Si la llamada falla, agota timeout o no hay clave API configurada, conmuta transparentemente a regex.
+    Intenta procesar mediante los modelos priorizados de Groq (GROQ_MODELS) con modo JSON nativo.
+    Si un modelo arroja 404 (NotFoundError) o falla, prueba de inmediato con el siguiente candidato.
+    Si todos los modelos fallan o no hay clave API configurada, conmuta transparentemente a regex.
     """
     api_key = getattr(settings, 'GROQ_API_KEY', '').strip()
     if api_key and isinstance(texto_o_audio, str):
-        try:
-            with ThreadPoolExecutor(max_workers=1) as executor:
-                future = executor.submit(
-                    _llamar_groq_parto,
-                    texto_o_audio,
-                    fincas_disponibles=fincas_disponibles,
-                    model=GROQ_DEFAULT_MODEL
-                )
-                return future.result(timeout=10)
-        except Exception as e:
-            logger.warning(f"Error procesando comando de parto con Groq: {e}. Conmutando a fallback local.")
-            return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
+        for modelo in GROQ_MODELS:
+            try:
+                with ThreadPoolExecutor(max_workers=1) as executor:
+                    future = executor.submit(
+                        _llamar_groq_parto,
+                        texto_o_audio,
+                        fincas_disponibles=fincas_disponibles,
+                        model=modelo
+                    )
+                    return future.result(timeout=10)
+            except Exception as e:
+                logger.warning(f"Error procesando comando de parto con Groq modelo {modelo}: {e}. Probando siguiente candidato.")
+                continue
+
+        logger.warning("Todos los modelos de Groq fallaron para comando de parto. Conmutando a fallback local.")
+        return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
 
     # Modo Simulado / Fallback sin API key
     if isinstance(texto_o_audio, str):
@@ -714,60 +721,36 @@ def procesar_importacion_lote(
             "animales": []
         }
 
-    try:
-        chat_completion = client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_CENSO},
-                {
-                    "role": "user",
-                    "content": f"Extrae todos los animales del siguiente contenido respetando rigurosamente las instrucciones:\n\n{texto_a_procesar}"
-                }
-            ],
-            model=GROQ_DEFAULT_MODEL,
-            response_format={"type": "json_object"},
-            temperature=0.1,
-            max_completion_tokens=4096,
-        )
+    datos = None
+    ultimo_error = None
 
-        respuesta_raw = chat_completion.choices[0].message.content
-        datos = json.loads(respuesta_raw)
-        animales_extraidos = datos.get("animales", [])
+    for modelo in GROQ_MODELS:
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT_CENSO},
+                    {
+                        "role": "user",
+                        "content": f"Extrae todos los animales del siguiente contenido respetando rigurosamente las instrucciones:\n\n{texto_a_procesar}"
+                    }
+                ],
+                model=modelo,
+                response_format={"type": "json_object"},
+                temperature=0.1,
+                max_completion_tokens=4096,
+            )
 
-        animales_limpios = []
-        for a in animales_extraidos:
-            crotal_str = str(a.get("crotal", "")).strip().zfill(4)
-            if len(crotal_str) == 4 and crotal_str.isdigit():
-                a["crotal"] = crotal_str
-                if a.get("crotal_madre"):
-                    madre_str = str(a["crotal_madre"]).strip().zfill(4)
-                    a["crotal_madre"] = madre_str if (len(madre_str) == 4 and madre_str.isdigit()) else None
-                else:
-                    a["crotal_madre"] = None
+            respuesta_raw = chat_completion.choices[0].message.content
+            datos = json.loads(respuesta_raw)
+            if datos:
+                break
+        except (NotFoundError, Exception) as e:
+            ultimo_error = e
+            logger.warning(f"Error con modelo {modelo} en Groq: {e}. Probando siguiente modelo de la cadena de fallback.")
+            continue
 
-                sexo_raw = str(a.get("sexo", "H")).upper()
-                a["sexo"] = "M" if "M" in sexo_raw else "H"
-
-                sub = str(a.get("sub_ubicacion", "PASTO")).upper()
-                if "CEB" in sub:
-                    a["sub_ubicacion"] = "CEBADERO"
-                elif "APA" in sub:
-                    a["sub_ubicacion"] = "APARTADO"
-                elif "BAJ" in sub or "DEF" in sub:
-                    a["sub_ubicacion"] = "BAJA"
-                else:
-                    a["sub_ubicacion"] = "PASTO"
-
-                animales_limpios.append(a)
-
-        return {
-            "intencion": "IMPORTAR_LOTE",
-            "finca_nombre": datos.get("finca_nombre"),
-            "animales": animales_limpios,
-            "error": None
-        }
-
-    except Exception as e:
-        logger.exception("Error procesando solicitud en Groq API")
+    if datos is None:
+        logger.error(f"Todos los modelos de Groq fallaron en procesar_importacion_lote. Último error: {ultimo_error}")
         if texto_a_procesar:
             res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
             if res_local.get("animales"):
@@ -782,6 +765,41 @@ def procesar_importacion_lote(
         return {
             "intencion": "IMPORTAR_LOTE",
             "finca_nombre": None,
-            "error": f"Error en el motor de IA (Groq): {str(e)}",
+            "error": f"Error en el motor de IA (Groq): {str(ultimo_error)}",
             "animales": []
         }
+
+    animales_extraidos = datos.get("animales", [])
+
+    animales_limpios = []
+    for a in animales_extraidos:
+        crotal_str = str(a.get("crotal", "")).strip().zfill(4)
+        if len(crotal_str) == 4 and crotal_str.isdigit():
+            a["crotal"] = crotal_str
+            if a.get("crotal_madre"):
+                madre_str = str(a["crotal_madre"]).strip().zfill(4)
+                a["crotal_madre"] = madre_str if (len(madre_str) == 4 and madre_str.isdigit()) else None
+            else:
+                a["crotal_madre"] = None
+
+            sexo_raw = str(a.get("sexo", "H")).upper()
+            a["sexo"] = "M" if "M" in sexo_raw else "H"
+
+            sub = str(a.get("sub_ubicacion", "PASTO")).upper()
+            if "CEB" in sub:
+                a["sub_ubicacion"] = "CEBADERO"
+            elif "APA" in sub:
+                a["sub_ubicacion"] = "APARTADO"
+            elif "BAJ" in sub or "DEF" in sub:
+                a["sub_ubicacion"] = "BAJA"
+            else:
+                a["sub_ubicacion"] = "PASTO"
+
+            animales_limpios.append(a)
+
+    return {
+        "intencion": "IMPORTAR_LOTE",
+        "finca_nombre": datos.get("finca_nombre"),
+        "animales": animales_limpios,
+        "error": None
+    }

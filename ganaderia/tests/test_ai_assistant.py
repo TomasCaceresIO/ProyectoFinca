@@ -120,8 +120,40 @@ class AIAssistantTestCase(TestCase):
         self.assertEqual(resultado["fecha_parto"], "2026-10-02")
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         self.assertEqual(call_kwargs["model"], GROQ_DEFAULT_MODEL)
-        self.assertEqual(GROQ_DEFAULT_MODEL, "llama-3.3-70b-versatile")
+        self.assertEqual(GROQ_DEFAULT_MODEL, "llama-3.1-8b-instant")
         self.assertEqual(call_kwargs["response_format"], {"type": "json_object"})
+
+    @override_settings(GROQ_API_KEY="test-fake-key")
+    @patch("ganaderia.services.ai_assistant.Groq")
+    def test_fallback_cadena_modelos_404(self, mock_groq_class):
+        """Verifica que si el primer modelo arroja 404 (NotFoundError), conmuta de inmediato al siguiente modelo."""
+        from groq import NotFoundError
+        mock_completion = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '''{
+            "finca_nombre": null,
+            "animales": [
+                {"crotal": "9901", "sexo": "H", "raza": "Limusina", "fecha_nacimiento": null, "crotal_madre": null, "sub_ubicacion": "PASTO"}
+            ]
+        }'''
+        mock_completion.choices = [mock_choice]
+
+        mock_client = MagicMock()
+        def side_effect_models(*args, **kwargs):
+            if kwargs.get("model") == "llama-3.1-8b-instant":
+                raise NotFoundError("Model not found", response=MagicMock(status_code=404), body={"error": "model_not_found"})
+            return mock_completion
+
+        mock_client.chat.completions.create.side_effect = side_effect_models
+        mock_groq_class.return_value = mock_client
+
+        resultado = procesar_importacion_lote(texto="Animal 9901 hembra limusina")
+        self.assertIsNone(resultado["error"])
+        self.assertEqual(len(resultado["animales"]), 1)
+        self.assertEqual(resultado["animales"][0]["crotal"], "9901")
+        llamadas_modelos = [call.kwargs.get("model") for call in mock_client.chat.completions.create.call_args_list]
+        self.assertIn("llama-3.1-8b-instant", llamadas_modelos)
+        self.assertIn("qwen/qwen3.8-27b", llamadas_modelos)
 
     @override_settings(GROQ_API_KEY="gsk_mock_test_token_not_real")
     @patch("ganaderia.services.ai_assistant.Groq")
