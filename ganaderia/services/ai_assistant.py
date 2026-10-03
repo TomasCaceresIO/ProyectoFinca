@@ -1,100 +1,78 @@
-import time
+import io
 import re
 import json
 import logging
 from datetime import date, timedelta
-from typing import Optional, Literal, List
+from typing import Any, Dict, List, Optional
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from django.conf import settings
 from django.utils import timezone
-from pydantic import BaseModel, Field
-
-try:
-    from google import genai
-    from google.genai import types
-    from google.genai import errors as genai_errors
-except ImportError:
-    genai = None
-    types = None
-    genai_errors = None
-
-import io
-try:
-    from pypdf import PdfReader
-except ImportError:
-    PdfReader = None
+from groq import Groq
+from pypdf import PdfReader
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
+GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GROQ_MODEL = GROQ_DEFAULT_MODEL
 CANDIDATE_MODELS = [
-    "gemini-3.8-flash",
+    "llama-3.3-70b-versatile",
+    "llama-3.1-8b-instant",
 ]
 
 
-def get_genai_client():
-    """
-    Inicializa el cliente oficial de Google GenAI flexibilizando la clave de API.
-    Acepta tanto las API Keys estándar (ej. AIza...) como los nuevos tokens con prefijo 'AQ.'
-    sin comprobaciones rígidas de longitud o formato.
-    """
-    if genai is None:
-        return None
-    api_key = getattr(settings, 'GEMINI_API_KEY', '').strip()
+def get_groq_client() -> Optional[Groq]:
+    """Inicializa y retorna la instancia de cliente oficial de Groq."""
+    api_key = getattr(settings, "GROQ_API_KEY", "").strip()
     if not api_key:
+        logger.error("GROQ_API_KEY no está configurada en settings.")
         return None
-    return genai.Client(api_key=api_key)
+    return Groq(api_key=api_key)
 
 
-class AnimalImportItem(BaseModel):
-    crotal: str = Field(description="Crotal obligatorio de 4 dígitos numéricos (ej. '4001', '0015').")
-    sexo: str = Field(default="H", description="Sexo del animal: 'H' (hembra) o 'M' (macho).")
-    raza: Optional[str] = Field(default="Limusina", description="Raza del animal (ej. Limusina, Retinta, Charolesa, etc.).")
-    fecha_nacimiento: Optional[str] = Field(default=None, description="Fecha de nacimiento en formato YYYY-MM-DD o null si no se conoce.")
-    crotal_madre: Optional[str] = Field(default=None, description="Crotal de 4 dígitos de la madre o null si no se conoce / es fundador.")
-    sub_ubicacion: Optional[str] = Field(default="PASTO", description="Recinto: 'PASTO', 'CEBADERO' o 'APARTADO'.")
+def extraer_texto_de_pdf(archivo_bytes: bytes) -> str:
+    """Extrae el contenido de texto plano de todas las páginas de un PDF en memoria."""
+    texto_acumulado = []
+    try:
+        reader = PdfReader(io.BytesIO(archivo_bytes))
+        for idx, page in enumerate(reader.pages):
+            contenido = page.extract_text() or ""
+            if contenido.strip():
+                texto_acumulado.append(f"--- PÁGINA {idx + 1} ---\n{contenido}")
+        return "\n\n".join(texto_acumulado)
+    except Exception as e:
+        logger.error(f"Error extrayendo texto del PDF con pypdf: {e}")
+        return ""
 
 
-class LoteImportOutput(BaseModel):
-    intencion: str = Field(default="IMPORTAR_LOTE", description="Intención del comando.")
-    finca_nombre: Optional[str] = Field(default=None, description="Nombre de la finca indicada en el lote o documento, o null.")
-    animales: List[AnimalImportItem] = Field(default_factory=list, description="Lista de animales a importar.")
+SYSTEM_PROMPT_CENSO = """
+Eres un asistente veterinario experto en auditoría de libros oficiales de explotación ganadera bovina (SITRAN / OCA / DIB).
+Tu tarea es analizar el texto extraído de un documento de censo o lote y devolver una lista estructurada de animales.
 
+IMPORTANTE SOBRE LAS COLUMNAS Y DATOS:
+- Las tablas pueden venir en cualquier orden de columnas.
+- NUNCA uses el año de nacimiento (ej. 2018, 2022, 2026) ni el número de orden de fila (01, 02... 92) como crotal.
+- El Crotal es el identificador visual de 4 dígitos numéricos asignado al animal (ej. 1001, 1012, 4088).
+- Fecha de nacimiento: Debe respetar la fecha que figura en el documento convertida a formato ISO YYYY-MM-DD. Si no tiene fecha, asigna null. NUNCA pongas la fecha de hoy por defecto.
+- Crotal madre: Si la fila dice 'Fundadora', 'Sin madre', '-' o está vacía, asigna null (será un animal fundador). Si especifica un número de crotal (ej. 1001), extrae esos 4 dígitos.
+- Sexo: Debe ser estrictamente 'H' (Hembra) o 'M' (Macho).
+- Raza: Texto de la raza indicada (ej. 'Limusina', 'Charolesa', 'Retinta', 'Cruzada'). Si no figura, usa 'Limusina'.
+- Sub-ubicación: Debe ser 'PASTO', 'CEBADERO', 'APARTADO' o 'BAJA'. Si no se menciona o dice campo/libre, usa 'PASTO'.
 
-class ComandoPartoOutput(BaseModel):
-    intencion: Literal["REGISTRAR_PARTO", "DESCONOCIDO"] = Field(
-        default="REGISTRAR_PARTO",
-        description="Intención identificada del usuario. 'REGISTRAR_PARTO' si describe un parto o cría nacida."
-    )
-    crotal_madre: Optional[str] = Field(
-        default=None,
-        description="Código o crotal de 4 dígitos de la vaca madre (ej. '3014')."
-    )
-    fecha_parto: Optional[str] = Field(
-        default=None,
-        description="Fecha del parto en formato YYYY-MM-DD. Resolver fechas relativas como hoy o ayer."
-    )
-    cria_crotal: Optional[str] = Field(
-        default=None,
-        description="Código o crotal de 4 dígitos de la cría nacida (ej. '5012')."
-    )
-    cria_sexo: Optional[Literal["M", "H"]] = Field(
-        default="H",
-        description="Sexo de la cría: 'M' para macho/ternero, 'H' para hembra/ternera."
-    )
-    cria_raza: Optional[str] = Field(
-        default="Retinta",
-        description="Raza de la cría (ej. Limusina, Retinta, Charolais, Avileña)."
-    )
-    cria_recinto: Optional[str] = Field(
-        default="PASTO",
-        description="Recinto asignado a la cría: 'PASTO' o 'CEBADERO'."
-    )
-    cria_finca: Optional[str] = Field(
-        default=None,
-        description="Nombre de la finca de la explotación donde se ubicará la cría (ej. 'Finca Montealto'). Null si no se indica."
-    )
-
+DEBES RESPONDER EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO con la siguiente estructura:
+{
+  "finca_nombre": null,
+  "animales": [
+    {
+      "crotal": "1001",
+      "sexo": "H",
+      "fecha_nacimiento": "2018-03-12",
+      "raza": "Limusina",
+      "crotal_madre": null,
+      "sub_ubicacion": "PASTO"
+    }
+  ]
+}
+"""
 
 PALABRAS_DIGITOS = {
     'cero': '0', 'uno': '1', 'un': '1', 'una': '1', 'dos': '2', 'tres': '3',
@@ -109,6 +87,13 @@ PALABRAS_COMPUESTAS = {
     'veintiséis': 26, 'veintisiete': 27, 'veintiocho': 28, 'veintinueve': 29,
     'treinta': 30, 'cuarenta': 40, 'cincuenta': 50, 'sesenta': 60,
     'setenta': 70, 'ochenta': 80, 'noventa': 90, 'cien': 100, 'ciento': 100,
+}
+
+MESES_ESP = {
+    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
+    'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
+    'septiembre': 9, 'setiembre': 9, 'octubre': 10,
+    'noviembre': 11, 'diciembre': 12
 }
 
 
@@ -127,13 +112,11 @@ def normalizar_crotal(valor: Optional[str]) -> Optional[str]:
     if not val_str:
         return None
 
-    # Si ya son dígitos puros
     if val_str.isdigit():
         if len(val_str) <= 4:
             return val_str.zfill(4)
         return val_str
 
-    # Quitar posibles prefijos como '#', 'nº', 'número', 'crotal'
     val_str = re.sub(r'^(?:#|n[ºo]|número|crotal)\s*', '', val_str).strip()
 
     if val_str.isdigit():
@@ -143,12 +126,10 @@ def normalizar_crotal(valor: Optional[str]) -> Optional[str]:
 
     tokens = val_str.replace('-', ' ').split()
 
-    # Caso A: Secuencia de dígitos individuales hablados (ej. "cero cero cero tres", "cero cuatro dos")
     if all(t in PALABRAS_DIGITOS for t in tokens):
         cadena_digitos = "".join(PALABRAS_DIGITOS[t] for t in tokens)
         return cadena_digitos.zfill(4)
 
-    # Caso B: Número compuesto (ej. "cuarenta y dos", "treinta y cinco", "veintitrés", "quince")
     total = 0
     i = 0
     es_compuesto = True
@@ -174,14 +155,6 @@ def normalizar_crotal(valor: Optional[str]) -> Optional[str]:
     return None
 
 
-MESES_ESP = {
-    'enero': 1, 'febrero': 2, 'marzo': 3, 'abril': 4,
-    'mayo': 5, 'junio': 6, 'julio': 7, 'agosto': 8,
-    'septiembre': 9, 'setiembre': 9, 'octubre': 10,
-    'noviembre': 11, 'diciembre': 12
-}
-
-
 def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) -> dict:
     """
     Parser simulado / fallback basado en reglas y expresiones regulares
@@ -189,7 +162,7 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
     """
     texto_lower = texto.lower()
     hoy = timezone.now().date()
-    
+
     # 1. Determinar fecha
     fecha_parto = None
     if "anteayer" in texto_lower:
@@ -203,7 +176,6 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
     elif "hoy" in texto_lower or "ha nacido hoy" in texto_lower or "nacio hoy" in texto_lower or "nació hoy" in texto_lower:
         fecha_parto = hoy
     else:
-        # Buscar formato textual en español: "10 de octubre de 2022" o "10 de octubre del 2022" o "el 10 de octubre 2022"
         m_texto_fecha = re.search(
             r'\b(\d{1,2})\s+de\s+([a-záéíóú]+)(?:\s+(?:de|del))?\s+(\d{4})\b',
             texto_lower
@@ -217,7 +189,6 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
                 except ValueError:
                     pass
 
-        # Buscar formato DD/MM/YYYY o DD-MM-YYYY
         if not fecha_parto:
             m_fecha = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', texto)
             if m_fecha:
@@ -227,7 +198,6 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
                 except ValueError:
                     pass
 
-        # Buscar formato YYYY-MM-DD
         if not fecha_parto:
             m_iso = re.search(r'\b(\d{4})[/-](\d{1,2})[/-](\d{1,2})\b', texto)
             if m_iso:
@@ -237,7 +207,6 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
                 except ValueError:
                     pass
 
-    # Si no se detectó ninguna fecha temporal explícita ni relativa, se asume hoy por defecto
     if not fecha_parto:
         fecha_parto = hoy
 
@@ -284,7 +253,6 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
                 finca_detectada = f_nom
                 break
     if not finca_detectada:
-        # Detectar patrones como "en finca X", "en la finca X", "finca X"
         m_finca = re.search(r'\b(?:en\s+la\s+finca|en\s+finca|finca)\s+([a-záéíóú0-9_\-]+(?:\s+[a-záéíóú0-9_\-]+)?)\b', texto_lower)
         if m_finca:
             finca_detectada = m_finca.group(1).title()
@@ -301,12 +269,9 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
     crotal_madre = None
     cria_crotal = None
 
-    # Intentar capturar por contexto sintáctico explícito (dígitos o palabras)
-    # Patrones para crotales que pueden ser números o palabras habladas
     m_madre = re.search(r'(?:vaca|madre|la|el|hembra)\s*(?:#|n[ºo]|número)?\s*([a-záéíóú0-9\s]+?)(?=\s+(?:pari[oó]|tuvo|dio|con|y|el|en|a|de|\d{4}|$))', texto, re.IGNORECASE)
     m_cria = re.search(r'(?:terner[ao]|becerr[ao]|cría|cria|hijo|hija|crotal)\s*(?:#|n[ºo]|número)?\s*([a-záéíóú0-9\s]+?)(?=\s+(?:con|en|el|de|del|raza|nacid[ao]|$))', texto, re.IGNORECASE)
 
-    # 1. Probar captura directa de 4 dígitos clásica
     m_madre_num = re.search(r'(?:vaca|madre|la|el|hembra)\s*(?:#|n[ºo]|número)?\s*(\d{1,4})\b', texto, re.IGNORECASE)
     m_cria_num = re.search(r'(?:terner[ao]|becerr[ao]|cría|cria|hijo|hija|crotal)\s*(?:#|n[ºo]|número)?\s*(\d{1,4})\b', texto, re.IGNORECASE)
 
@@ -324,11 +289,9 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
         if c_norm:
             cria_crotal = c_norm
 
-    # Extraer todos los números de 1 a 4 dígitos
     todos_nums = [n for n in re.findall(r'\b\d{1,4}\b', texto)]
     crotales_candidatos = []
     for num in todos_nums:
-        # Evitar números de 1 o 2 dígitos que pertenezcan a la fecha
         idx = texto.find(num)
         es_crotal_explicito = False
         if idx != -1:
@@ -337,18 +300,14 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
                 es_crotal_explicito = True
         if len(num) == 4 and num in anios_fecha and not es_crotal_explicito:
             continue
-        # Si tiene 1 o 2 dígitos y forma parte de una fecha textual (ej. "el 10 de octubre"), ignorar si coincide con el día o mes
         if len(num) <= 2:
             sub_post = texto_lower[idx:min(len(texto_lower), idx + 20)]
             if any(f"de {mes}" in sub_post for mes in MESES_ESP.keys()):
                 continue
-        # Normalizar a 4 dígitos
         norm = normalizar_crotal(num)
         if norm:
             crotales_candidatos.append(norm)
 
-    # Si se capturó cria_crotal sintácticamente pero no crotal_madre:
-    # no podemos reusar cria_crotal como crotal_madre
     candidatos_restantes = [c for c in crotales_candidatos if c != cria_crotal and c != crotal_madre]
 
     if not crotal_madre:
@@ -371,16 +330,13 @@ def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) ->
     }
 
 
-def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas_disponibles: list = None, model: str = None) -> dict:
-    """Llama a la API oficial de Google GenAI con structured outputs."""
-    if genai is None or types is None:
-        raise ImportError("El paquete google-genai no está disponible.")
-
-    client = get_genai_client()
+def _llamar_groq_parto(texto: str, fincas_disponibles: list = None, model: str = None) -> dict:
+    """Llama a la API oficial de Groq para extraer datos estructurados de parto con JSON mode nativo."""
+    client = get_groq_client()
     if client is None:
-        raise ValueError("Clave GEMINI_API_KEY no configurada o vacía.")
+        raise ValueError("Clave GROQ_API_KEY no configurada o vacía.")
 
-    modelo_a_usar = model or DEFAULT_GEMINI_MODEL
+    modelo_a_usar = model or GROQ_DEFAULT_MODEL
     hoy = timezone.now().date()
     hoy_iso = hoy.strftime('%Y-%m-%d')
     hoy_es = hoy.strftime('%d/%m/%Y')
@@ -390,48 +346,39 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
         f"Eres el Asistente de Inteligencia Artificial de un sistema de gestión ganadera bovina. "
         f"La fecha de hoy de referencia es {hoy_iso} ({hoy_es}). "
         f"Las fincas disponibles en la explotación son: [{fincas_str}]. "
-        f"Tu cometido es extraer con exactitud los datos para registrar un parto de vaca y su cría. "
+        f"Tu cometido es extraer con exactitud los datos para registrar un parto de vaca y su cría.\n\n"
         f"Reglas estrictas de extracción:\n"
         f"- crotal_madre: Crotal obligatorio de exactamente 4 dígitos de la vaca madre (ej. '3014', '0001'). "
         f"Si se dice en palabras (ej. 'tres', 'cero cero tres') normalízalo a 4 dígitos con ceros a la izquierda (ej. '0003'). "
         f"Si no se especifica de forma explícita en el mensaje o falta, DEBES devolver null.\n"
         f"- cria_crotal: Crotal obligatorio de exactamente 4 dígitos asignado a la cría nacida (ej. '5012', '0003'). "
         f"Si se dice en palabras (ej. 'cuarenta y dos') normalízalo a 4 dígitos (ej. '0042'). "
-        f"PROHIBIDO TERMINANTEMENTE asignar números de año (ej. 19xx, 20xx, como 2022, 2024, etc.) como cria_crotal, "
-        f"a menos que el usuario diga explícitamente 'con crotal 2022'. Si no se indica explícitamente un crotal para la cría, "
-        f"DEBES devolver null.\n"
+        f"PROHIBIDO TERMINANTEMENTE asignar números de año (ej. 19xx, 20xx) ni el crotal de la madre como cria_crotal. "
+        f"Si no se indica explícitamente un crotal para la cría, DEBES devolver null.\n"
         f"- fecha_parto: Fecha del parto en formato YYYY-MM-DD. Si el usuario indica una fecha explícita pasada o histórica "
-        f"(ej. '10 de octubre de 2022', '10/10/2022'), DEBES respetarla y parsearla fielmente (ej. '2022-10-10'). "
-        f"Solo debes usar la fecha de hoy ({hoy_iso}) si el usuario dice 'hoy', 'ha nacido hoy', o no aporta ninguna indicación temporal.\n"
+        f"(ej. '10 de octubre de 2022', '10/10/2022'), DEBES respetarla y parsearla fielmente ('2022-10-10'). "
+        f"Solo debes usar la fecha de hoy ({hoy_iso}) si el usuario dice 'hoy', 'ha nacido hoy', o no aporta indicación temporal.\n"
         f"- cria_sexo: 'H' para hembra/ternera/becerra, 'M' para macho/ternero/becerro.\n"
-        f"- cria_raza: raza de la cría (ej. 'Limusina', 'Retinta', 'Charolais'). Si no se menciona, usa la más probable o 'Retinta'.\n"
+        f"- cria_raza: raza de la cría (ej. 'Limusina', 'Retinta', 'Charolais'). Si no se menciona, usa 'Retinta'.\n"
         f"- cria_recinto: 'PASTO' o 'CEBADERO' (por defecto 'PASTO').\n"
-        f"- cria_finca: nombre exacto de la finca mencionada para ubicar la cría si el usuario la nombra (ej. '{fincas_disponibles[0] if fincas_disponibles else 'Finca Principal'}'). Si no menciona finca, devolver null.\n"
-        f"- intencion: 'REGISTRAR_PARTO' si describe un parto o nacimiento."
+        f"- cria_finca: nombre exacto de la finca mencionada para ubicar la cría si el usuario la nombra. Si no, null.\n"
+        f"- intencion: 'REGISTRAR_PARTO' si describe un parto o nacimiento.\n\n"
+        f"DEBES RESPONDER EXCLUSIVAMENTE CON UN OBJETO JSON VÁLIDO con las claves anteriores."
     )
 
-    if isinstance(texto_o_audio, (bytes, bytearray)):
-        part = types.Part.from_bytes(data=bytes(texto_o_audio), mime_type=audio_content_type)
-        contents = [part, "Extrae los datos de registro de parto a partir de este audio."]
-    elif hasattr(texto_o_audio, 'read'):
-        audio_bytes = texto_o_audio.read()
-        part = types.Part.from_bytes(data=audio_bytes, mime_type=audio_content_type)
-        contents = [part, "Extrae los datos de registro de parto a partir de este audio."]
-    else:
-        contents = str(texto_o_audio)
-
-    response = client.models.generate_content(
+    chat_completion = client.chat.completions.create(
+        messages=[
+            {"role": "system", "content": system_instruction},
+            {"role": "user", "content": texto}
+        ],
         model=modelo_a_usar,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type='application/json',
-            response_schema=ComandoPartoOutput,
-            temperature=0.1,
-        )
+        response_format={"type": "json_object"},
+        temperature=0.1,
+        max_completion_tokens=1024,
     )
 
-    res_dict = json.loads(response.text)
+    res_raw = chat_completion.choices[0].message.content
+    res_dict = json.loads(res_raw)
     if res_dict.get('crotal_madre'):
         res_dict['crotal_madre'] = normalizar_crotal(res_dict['crotal_madre'])
     if res_dict.get('cria_crotal'):
@@ -439,103 +386,35 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas
     return res_dict
 
 
-def _clasificar_error_gemini(exc) -> tuple[bool, bool]:
+def procesar_comando_parto(
+    texto_o_audio,
+    audio_content_type: str = 'audio/webm',
+    fincas_disponibles: list = None
+) -> dict:
     """
-    Clasifica la excepción en (es_503, es_404_o_descartar).
-    - es_503: error 503 UNAVAILABLE / saturación (debe reintentarse hasta 3 veces con [2.0, 4.0, 6.0]s).
-    - es_404_o_descartar: error 404 NOT_FOUND u otro no reintentable en el mismo modelo (salto inmediato al siguiente).
+    Procesa un comando de voz o texto para registrar un parto.
+    Intenta procesar mediante Groq Llama-3.3-70B con modo JSON nativo.
+    Si la llamada falla, agota timeout o no hay clave API configurada, conmuta transparentemente a regex.
     """
-    code = getattr(exc, 'code', None)
-    msg = str(exc).lower()
-
-    if (code == 503) or any(term in msg for term in ("503", "high demand", "unavailable", "overloaded", "resource exhausted")):
-        return True, False
-    if (code == 404) or ("404" in msg and "not found" in msg):
-        return False, True
-    if code == 429:
-        return True, False
-    return False, False
-
-
-def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm', fincas_disponibles: list = None) -> dict:
-    """
-    Punto de entrada principal para el procesamiento de comandos de parto (texto o audio).
-    Itera sobre la escalera de modelos (DEFAULT_GEMINI_MODEL + CANDIDATE_MODELS).
-    - Ante 503 UNAVAILABLE: hasta 3 reintentos con esperas progresivas [2.0, 4.0, 6.0]s antes de abandonar el modelo.
-    - Ante 404 NOT_FOUND: no reintenta; salta inmediatamente al siguiente candidato.
-    - Si todos fallan, conmuta limpiamente al fallback regex local o devuelve mensaje amigable.
-    """
-    api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
-    
-    if api_key.strip():
-        modelos_a_probar = [DEFAULT_GEMINI_MODEL] + [m for m in CANDIDATE_MODELS if m != DEFAULT_GEMINI_MODEL]
-        last_exception = None
-
-        for idx_m, modelo in enumerate(modelos_a_probar):
-            # 1 llamada inicial + hasta 3 reintentos en 503
-            delays_503 = [2.0, 4.0, 6.0]
-            max_intentos = 1 + len(delays_503)
-
-            for intento in range(max_intentos):
-                try:
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            _llamar_gemini,
-                            texto_o_audio,
-                            audio_content_type,
-                            fincas_disponibles,
-                            model=modelo
-                        )
-                        return future.result(timeout=8.0)
-                except FuturesTimeoutError as e:
-                    logger.warning(f"Timeout (8s) con modelo {modelo} en intento {intento + 1}.")
-                    last_exception = e
-                    break  # En timeout pasamos al siguiente candidato
-                except Exception as e:
-                    last_exception = e
-                    es_503, es_404 = _clasificar_error_gemini(e)
-
-                    if es_404:
-                        logger.warning(f"Modelo {modelo} no encontrado (404 NOT_FOUND). Saltando inmediatamente al siguiente.")
-                        break
-
-                    if es_503 and intento < len(delays_503):
-                        espera = delays_503[intento]
-                        logger.warning(
-                            f"Servidor sobrecargado (503/429) en modelo {modelo} (intento {intento + 1}). "
-                            f"Reintentando en {espera}s..."
-                        )
-                        time.sleep(espera)
-                        continue
-                    elif es_503:
-                        logger.warning(f"Modelo {modelo} agotó los 3 reintentos en 503. Saltando al siguiente modelo candidato.")
-                        time.sleep(0.5)
-                        break
-                    else:
-                        logger.warning(f"Error no recuperable en modelo {modelo} ({e}). Saltando al siguiente candidato.")
-                        break
-
-        # Si todos los modelos de la escalera han fallado
-        logger.warning(f"Todos los modelos de Gemini fallaron. Último error: {last_exception}. Conmutando a fallback.")
-        if isinstance(texto_o_audio, str):
+    api_key = getattr(settings, 'GROQ_API_KEY', '').strip()
+    if api_key and isinstance(texto_o_audio, str):
+        try:
+            with ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(
+                    _llamar_groq_parto,
+                    texto_o_audio,
+                    fincas_disponibles=fincas_disponibles,
+                    model=GROQ_DEFAULT_MODEL
+                )
+                return future.result(timeout=10)
+        except Exception as e:
+            logger.warning(f"Error procesando comando de parto con Groq: {e}. Conmutando a fallback local.")
             return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
-        return {
-            "intencion": "REGISTRAR_PARTO",
-            "crotal_madre": None,
-            "fecha_parto": timezone.now().date().strftime('%Y-%m-%d'),
-            "cria_crotal": None,
-            "cria_sexo": "H",
-            "cria_raza": "Retinta",
-            "cria_recinto": "PASTO",
-            "cria_finca": None,
-            "error": "Los servidores de Google AI están experimentando un pico de saturación temporal. Por favor, reintenta en unos instantes."
-        }
 
     # Modo Simulado / Fallback sin API key
     if isinstance(texto_o_audio, str):
         return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
-    
-    # Audio recibido sin API key configurada
+
     return {
         "intencion": "REGISTRAR_PARTO",
         "crotal_madre": None,
@@ -545,7 +424,7 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
         "cria_raza": "Retinta",
         "cria_recinto": "PASTO",
         "cria_finca": None,
-        "error": "El análisis de audio directo requiere configurar la variable GEMINI_API_KEY."
+        "error": "El análisis de audio directo requiere configurar la variable GROQ_API_KEY."
     }
 
 
@@ -554,25 +433,21 @@ def _extraer_tabla_pdf_dinamica(texto: str, fincas_disponibles: list = None) -> 
     Parser heurístico dinámico para tablas de documentos PDF de censo con columnas en orden variable.
     Detecta la cabecera por palabras clave y mapea la posición/índice de cada columna.
     Extrae fila a fila evitando solapamientos entre crotales, fechas, órdenes o razas.
+    Retorna una lista de diccionarios de animales.
     """
     lineas = [ln.strip() for ln in texto.splitlines() if ln.strip()]
     if not lineas:
         return []
 
-    # 1. Buscar la fila de encabezados
     header_idx = -1
-    col_map = {}  # 'crotal': idx, 'sexo': idx, ...
+    col_map = {}
 
     for i, linea in enumerate(lineas):
         linea_lower = linea.lower()
-        # Una línea de cabecera debe contener al menos dos de estas palabras clave
         kw_hits = sum(1 for kw in ["crotal", "identificador", "chapa", "sexo", "sex", "nacimiento", "f. nac", "fecha", "raza", "madre", "ubicación", "recinto"] if kw in linea_lower)
         if kw_hits >= 2 and ("crotal" in linea_lower or "identificador" in linea_lower or "chapa" in linea_lower):
-            # Posible fila de cabecera
-            # Dividir por separadores: '|', '\t', o 2 o más espacios
             partes = [p.strip() for p in re.split(r'\||\t|\s{2,}', linea) if p.strip()]
             if len(partes) >= 2:
-                # Mapear cada columna por nombre
                 temp_map = {}
                 for idx, p in enumerate(partes):
                     p_l = p.lower()
@@ -599,127 +474,110 @@ def _extraer_tabla_pdf_dinamica(texto: str, fincas_disponibles: list = None) -> 
     if header_idx == -1 or 'crotal' not in col_map:
         return []
 
-    animales_extraidos = []
+    animales = []
+    c_idx = col_map['crotal']
+    s_idx = col_map.get('sexo')
+    f_idx = col_map.get('fecha_nacimiento')
+    r_idx = col_map.get('raza')
+    m_idx = col_map.get('crotal_madre')
+    u_idx = col_map.get('sub_ubicacion')
 
-    # 2. Iterar filas siguientes
     for linea in lineas[header_idx + 1:]:
-        linea_l = linea.lower()
-        # Ignorar líneas de pie de página, totales o cabeceras repetidas
-        if any(term in linea_l for term in ["página", "pagina", "total", "resumen", "diputación", "diputacion", "explotación", "explotacion"]):
-            continue
-        # Ignorar si es otra cabecera repetida
-        if "crotal" in linea_l and ("sexo" in linea_l or "raza" in linea_l):
+        if any(h in linea.lower() for h in ["total", "página", "pagina", "firma", "titular", "explotación", "explotacion"]):
             continue
 
-        # Dividir celdas con el mismo criterio
-        celdas = [c.strip() for c in re.split(r'\||\t|\s{2,}', linea) if c.strip()]
-        if not celdas:
+        partes = [p.strip() for p in re.split(r'\||\t|\s{2,}', linea) if p.strip()]
+        if len(partes) <= c_idx:
             continue
 
-        # Extraer crotal según el índice mapeado
-        idx_crotal = col_map.get('crotal')
-        if idx_crotal is None or idx_crotal >= len(celdas):
-            continue
-
-        val_crotal_raw = celdas[idx_crotal]
-        # Buscar el token de 4 dígitos numéricos en la celda del crotal
-        m_crotal = re.search(r'\b(\d{4})\b', val_crotal_raw)
-        if not m_crotal:
-            # Reintentar si tiene 1-3 dígitos y rellenar con ceros
-            m_crotal = re.search(r'\b(\d{1,4})\b', val_crotal_raw)
-            if not m_crotal:
+        raw_crotal = partes[c_idx]
+        crotal_limpio = normalizar_crotal(raw_crotal)
+        if not crotal_limpio or len(crotal_limpio) != 4 or not crotal_limpio.isdigit():
+            m_c = re.search(r'\b\d{4}\b', raw_crotal)
+            if m_c:
+                crotal_limpio = m_c.group(0)
+            else:
                 continue
-            crotal = normalizar_crotal(m_crotal.group(1))
-        else:
-            crotal = m_crotal.group(1)
 
-        if not crotal or len(crotal) != 4 or not crotal.isdigit():
-            continue
-
-        # Sexo
         sexo = 'H'
-        idx_sexo = col_map.get('sexo')
-        if idx_sexo is not None and idx_sexo < len(celdas):
-            val_sexo = celdas[idx_sexo].strip().lower()
-            if any(s in val_sexo for s in ["hembra", "vaca", "novilla"]) or val_sexo == "h":
-                sexo = 'H'
-            elif any(s in val_sexo for s in ["macho", "toro", "buey"]) or val_sexo == "m":
+        if s_idx is not None and s_idx < len(partes):
+            s_val = partes[s_idx].upper().strip()
+            if s_val == 'M' or 'MACHO' in s_val or s_val.startswith('M'):
                 sexo = 'M'
-            elif "h" in val_sexo and "m" not in val_sexo:
+            elif s_val == 'H' or 'HEMBRA' in s_val or s_val.startswith('H'):
                 sexo = 'H'
-            elif "m" in val_sexo and "h" not in val_sexo:
-                sexo = 'M'
 
-        # Raza
-        raza = 'Limusina'
-        idx_raza = col_map.get('raza')
-        if idx_raza is not None and idx_raza < len(celdas):
-            val_raza = celdas[idx_raza].lower()
-            for r_key, r_nom in [
-                ("limusin", "Limusina"), ("limosina", "Limusina"), ("charol", "Charolesa"),
-                ("retinta", "Retinta"), ("morucha", "Morucha"), ("angus", "Angus"),
-                ("frisona", "Frisona"), ("avileña", "Avileña-Negra Ibérica"), ("cruzad", "Cruzado")
-            ]:
-                if r_key in val_raza:
-                    raza = r_nom
-                    break
-
-        # Fecha de nacimiento
         fecha_nac = None
-        idx_fnac = col_map.get('fecha_nacimiento')
-        if idx_fnac is not None and idx_fnac < len(celdas):
-            val_fnac = celdas[idx_fnac]
-            m_f = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', val_fnac)
-            if m_f:
-                d, m, y = map(int, m_f.groups())
+        if f_idx is not None and f_idx < len(partes):
+            raw_f = partes[f_idx]
+            m_d = re.search(r'(\d{1,2})[/-](\d{1,2})[/-](\d{4})', raw_f)
+            if m_d:
+                d, m, y = map(int, m_d.groups())
                 try:
                     fecha_nac = date(y, m, d).strftime('%Y-%m-%d')
                 except ValueError:
-                    fecha_nac = None
+                    pass
+            elif re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', raw_f):
+                m_d2 = re.search(r'(\d{4})[/-](\d{1,2})[/-](\d{1,2})', raw_f)
+                y, m, d = map(int, m_d2.groups())
+                try:
+                    fecha_nac = date(y, m, d).strftime('%Y-%m-%d')
+                except ValueError:
+                    pass
 
-        # Madre
+        raza = 'Limusina'
+        if r_idx is not None and r_idx < len(partes):
+            r_val = partes[r_idx]
+            if len(r_val) >= 3 and not r_val.isdigit():
+                raza = r_val.title()
+
         crotal_madre = None
-        idx_madre = col_map.get('crotal_madre')
-        if idx_madre is not None and idx_madre < len(celdas):
-            val_madre = celdas[idx_madre].strip().lower()
-            if not any(f in val_madre for f in ["fundador", "fundadora", "sin madre", "-", "null", "none"]):
-                m_mad = re.search(r'\b(\d{1,4})\b', val_madre)
-                if m_mad:
-                    crotal_madre = normalizar_crotal(m_mad.group(1))
+        if m_idx is not None and m_idx < len(partes):
+            raw_m = partes[m_idx]
+            if raw_m.lower() not in ['fundadora', 'sin madre', '-', '', 'ninguna', 'none', 'null']:
+                m_norm = normalizar_crotal(raw_m)
+                if m_norm and len(m_norm) == 4 and m_norm.isdigit():
+                    crotal_madre = m_norm
 
-        # Recinto / Sub-ubicación
         sub_ubicacion = 'PASTO'
-        idx_ubic = col_map.get('sub_ubicacion')
-        if idx_ubic is not None and idx_ubic < len(celdas):
-            val_ubic = celdas[idx_ubic].upper()
-            if "CEBADERO" in val_ubic:
+        if u_idx is not None and u_idx < len(partes):
+            u_val = partes[u_idx].upper()
+            if 'CEB' in u_val:
                 sub_ubicacion = 'CEBADERO'
-            elif "APARTADO" in val_ubic:
+            elif 'APA' in u_val:
                 sub_ubicacion = 'APARTADO'
-            elif "BAJA" in val_ubic:
+            elif 'BAJ' in u_val or 'DEF' in u_val:
                 sub_ubicacion = 'BAJA'
 
-        animales_extraidos.append({
-            "crotal": crotal,
-            "sexo": sexo,
-            "raza": raza,
-            "fecha_nacimiento": fecha_nac,
-            "crotal_madre": crotal_madre,
-            "sub_ubicacion": sub_ubicacion,
+        animales.append({
+            'crotal': crotal_limpio,
+            'sexo': sexo,
+            'raza': raza,
+            'fecha_nacimiento': fecha_nac,
+            'crotal_madre': crotal_madre,
+            'sub_ubicacion': sub_ubicacion,
         })
 
-    return animales_extraidos
+    return animales
 
 
 def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
     """
-    Parser simulado / fallback para importar lotes de animales a partir de texto o dictado.
-    Primero intenta analizar como tabla estructurada dinámica por encabezados.
-    Si no detecta tabla, recurre al parser de lenguaje natural / regex libre.
+    Parser heurístico regex para bloques de texto o tablas en lote.
+    Retorna un diccionario con formato:
+    {'intencion': 'IMPORTAR_LOTE', 'finca_nombre': ..., 'animales': [...]}
     """
+    tabla_dinamica = _extraer_tabla_pdf_dinamica(texto, fincas_disponibles)
+    if tabla_dinamica:
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": None,
+            "animales": tabla_dinamica,
+        }
+
     texto_lower = texto.lower()
 
-    # 1. Detectar finca si se menciona
+    # 1. Finca detectada si viene
     finca_detectada = None
     if fincas_disponibles:
         for f_nom in fincas_disponibles:
@@ -731,16 +589,7 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
         if m_f:
             finca_detectada = m_f.group(1).title()
 
-    # Intentar extracción tabular dinámica por encabezados
-    animales_tabla = _extraer_tabla_pdf_dinamica(texto, fincas_disponibles=fincas_disponibles)
-    if animales_tabla:
-        return {
-            "intencion": "IMPORTAR_LOTE",
-            "finca_nombre": finca_detectada,
-            "animales": animales_tabla,
-        }
-
-    # Recinto global
+    # 2. Recinto global
     recinto_global = "PASTO"
     if "cebadero" in texto_lower:
         recinto_global = "CEBADERO"
@@ -754,13 +603,11 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
         anio_nacimiento = m_anio.group(1)
 
     animales_extraidos = []
-    
-    # Encontrar todas las menciones a números candidatos
-    candidatos = re.finditer(r'\b(\d{1,4})\b', texto)
+
+    candidatos = list(re.finditer(r'\b(\d{1,4})\b', texto))
     posiciones = []
     for c in candidatos:
         val = c.group(1)
-        # Ignorar si es el año de nacimiento
         if anio_nacimiento and val == anio_nacimiento:
             continue
         posiciones.append((c.start(), c.end(), val))
@@ -773,14 +620,12 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
         if not c_norm:
             continue
 
-        # Sexo
         sexo = "H"
         if any(w in ventana for w in ["macho", "ternero", "becerro", "toro"]):
             sexo = "M"
         elif any(w in ventana for w in ["hembra", "ternera", "becerra", "vaca"]):
             sexo = "H"
 
-        # Raza
         raza = "Limusina"
         for r_key, r_nom in [
             ("limusin", "Limusina"), ("limosina", "Limusina"), ("charol", "Charolesa"),
@@ -791,13 +636,11 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
                 raza = r_nom
                 break
 
-        # Madre: buscar si se menciona "hijo de XXXX" o "madre XXXX"
         crotal_madre = None
         m_madre = re.search(r'(?:madre|hij[ao]\s+de)\s*(?:#|n[ºo])?\s*(\d{1,4})\b', ventana)
         if m_madre:
             crotal_madre = normalizar_crotal(m_madre.group(1))
 
-        # Fecha nacimiento
         fnac = None
         m_fecha = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', ventana)
         if m_fecha:
@@ -825,180 +668,120 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
     }
 
 
-def _llamar_gemini_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None, model: str = None) -> dict:
-    """Invoca Gemini oficial para extraer estructuradamente un lote de animales desde PDF o texto."""
-    if genai is None or types is None:
-        raise ImportError("El paquete google-genai no está disponible.")
-
-    client = get_genai_client()
-    if client is None:
-        raise ValueError("Clave GEMINI_API_KEY no configurada o vacía.")
-
-    modelo_a_usar = model or DEFAULT_GEMINI_MODEL
-    hoy = timezone.now().date()
-    hoy_iso = hoy.strftime('%Y-%m-%d')
-    fincas_str = ", ".join(fincas_disponibles) if fincas_disponibles else "no especificadas"
-
-    system_instruction = (
-        f"Eres el Asistente Experto en Gestión Ganadera Bovina para importación de censos. "
-        f"Fecha actual: {hoy_iso}. Fincas disponibles en la explotación: [{fincas_str}]. "
-        f"Tu tarea es analizar el documento PDF oficial o el texto/orden proporcionado y extraer la lista completa de animales a censar. "
-        f"Reglas estrictas:\n"
-        f"1. crotal: Obligatorio. Formato de 4 dígitos numéricos (ej. '4001', '0015'). Normaliza números enteros a 4 dígitos rellenando con ceros si es preciso.\n"
-        f"2. sexo: 'H' para hembra/vaca/ternera/novilla, 'M' para macho/toro/buey/ternero/becerro.\n"
-        f"3. raza: Limusina, Retinta, Charolesa, etc. (por defecto 'Limusina' si no se precisa).\n"
-        f"4. fecha_nacimiento: YYYY-MM-DD si figura en el documento o se deduce del texto; null si no se conoce.\n"
-        f"5. crotal_madre: Crotal de 4 dígitos de la vaca madre si se indica explícitamente. Si no figura o el animal es fundador / sin madre, DEBES devolver null.\n"
-        f"6. sub_ubicacion: 'PASTO', 'CEBADERO' o 'APARTADO' (por defecto 'PASTO').\n"
-        f"7. finca_nombre: Nombre de la finca de la explotación si se menciona en el documento o texto; null si no figura."
-    )
-
-    contents = []
-    if archivo_bytes:
-        part = types.Part.from_bytes(data=bytes(archivo_bytes), mime_type=mime_type)
-        contents.append(part)
-        contents.append("Extrae todos los animales del documento oficial adjunto siguiendo el esquema estructurado.")
-    elif texto:
-        contents.append(str(texto))
-
-    response = client.models.generate_content(
-        model=modelo_a_usar,
-        contents=contents,
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            response_mime_type='application/json',
-            response_schema=LoteImportOutput,
-            temperature=0.1,
-        )
-    )
-
-    res_dict = json.loads(response.text)
-    # Sanitizar y normalizar crotales
-    if res_dict.get('animales'):
-        for item in res_dict['animales']:
-            if item.get('crotal'):
-                item['crotal'] = normalizar_crotal(item['crotal'])
-            if item.get('crotal_madre'):
-                item['crotal_madre'] = normalizar_crotal(item['crotal_madre'])
-    return res_dict
-
-
-def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None) -> dict:
-    """
-    Punto de entrada principal para importar lotes de animales (PDF oficial o texto/dictado).
-    Estrategia Local-First y resiliencia de API:
-    1. Si el archivo PDF contiene texto digital extraíble (pypdf.extract_text()):
-       Se procesa directamente con el parser local de encabezados dinámicos (_extraer_tabla_pdf_dinamica).
-       Si detecta animales, devuelve el resultado de inmediato con alta velocidad y cero dependencia de cuota externa.
-    2. Si el PDF no contiene texto plano (es un documento escaneado/imagen) o la extracción devuelve 0 animales:
-       Invoca la API de Gemini multimodal con los bytes del archivo.
-    3. Si la llamada a Gemini arroja 503 UNAVAILABLE: no bloquear la interfaz; muestra mensaje descriptivo y
-       da la opción de contingencia.
-    """
-    api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
-
-    # 1. Extractor local de texto como primera opción si se recibe PDF (Estrategia Local-First)
+def procesar_importacion_lote(
+    texto: Optional[str] = None,
+    archivo_bytes: Optional[bytes] = None,
+    mime_type: str = "application/pdf",
+    fincas_disponibles: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """Procesa un PDF o texto de entrada mediante Groq Llama-3.3-70B y retorna los animales parseados."""
     texto_extraido_pdf = ""
-    if archivo_bytes and PdfReader is not None:
-        try:
-            reader = PdfReader(io.BytesIO(archivo_bytes))
-            for page in reader.pages:
-                texto_extraido_pdf += (page.extract_text() or "") + "\n"
-            texto_extraido_pdf = texto_extraido_pdf.strip()
-            if texto_extraido_pdf:
-                logger.info(f"Texto digital extraído del PDF ({len(texto_extraido_pdf)} caracteres). Intentando procesamiento Local-First.")
-                # Procesar directamente con el parser local dinámico
-                res_local = _extraer_lote_regex(texto_extraido_pdf, fincas_disponibles=fincas_disponibles)
-                if res_local.get('animales') and len(res_local['animales']) > 0:
-                    logger.info(f"Extracción local completada exitosamente: {len(res_local['animales'])} animales detectados.")
-                    return res_local
-        except Exception as e:
-            logger.warning(f"No se pudo extraer texto plano del PDF: {e}")
+    if archivo_bytes:
+        texto_extraido_pdf = extraer_texto_de_pdf(archivo_bytes)
+        if not texto_extraido_pdf.strip():
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": None,
+                "error": "No se pudo extraer texto digital del documento PDF adjunto. Compruebe que no sea un archivo escaneado sin OCR.",
+                "animales": []
+            }
 
-    # Si es texto plano directo del usuario (dictado o texto libre)
-    if texto and not archivo_bytes:
-        # Intentar parser local dinámico / regex primero si no hay API key o como fallback rápido
-        if not api_key.strip():
-            return _extraer_lote_regex(texto, fincas_disponibles=fincas_disponibles)
+    texto_a_procesar = texto_extraido_pdf if texto_extraido_pdf else (texto.strip() if texto else "")
 
-    # 2. Solo si el PDF no contiene texto plano (documento escaneado/imagen) o es texto/dictado complejo:
-    llm_texto = texto or texto_extraido_pdf
-    llm_archivo_bytes = archivo_bytes if not texto_extraido_pdf else None
-
-    texto_para_fallback = texto or texto_extraido_pdf
-
-    if api_key.strip():
-        modelos_a_probar = [DEFAULT_GEMINI_MODEL] + [m for m in CANDIDATE_MODELS if m != DEFAULT_GEMINI_MODEL]
-        last_exception = None
-
-        for idx_m, modelo in enumerate(modelos_a_probar):
-            delays_503 = [2.0, 4.0, 6.0]
-            max_intentos = 1 + len(delays_503)
-
-            for intento in range(max_intentos):
-                try:
-                    with ThreadPoolExecutor(max_workers=1) as executor:
-                        future = executor.submit(
-                            _llamar_gemini_lote,
-                            texto=llm_texto,
-                            archivo_bytes=llm_archivo_bytes,
-                            mime_type=mime_type,
-                            fincas_disponibles=fincas_disponibles,
-                            model=modelo
-                        )
-                        return future.result(timeout=15.0)
-                except FuturesTimeoutError as e:
-                    logger.warning(f"Timeout (15s) en importación de lote con modelo {modelo} (intento {intento + 1}).")
-                    last_exception = e
-                    break
-                except Exception as e:
-                    last_exception = e
-                    es_503, es_404 = _clasificar_error_gemini(e)
-
-                    if es_404:
-                        logger.warning(f"Modelo {modelo} no encontrado (404 NOT_FOUND). Saltando inmediatamente al siguiente.")
-                        break
-
-                    if es_503 and intento < len(delays_503):
-                        espera = delays_503[intento]
-                        logger.warning(
-                            f"Servidor sobrecargado (503/429) en importación con modelo {modelo} (intento {intento + 1}). "
-                            f"Reintentando en {espera}s..."
-                        )
-                        time.sleep(espera)
-                        continue
-                    elif es_503:
-                        logger.warning(f"Modelo {modelo} agotó los 3 reintentos en 503. Saltando al siguiente modelo.")
-                        time.sleep(0.5)
-                        break
-                    else:
-                        logger.warning(f"Error no recuperable en modelo {modelo} ({e}). Saltando al siguiente candidato.")
-                        break
-
-        # Fallback si todos los modelos fallaron
-        logger.warning(f"Todos los modelos fallaron para importación de lote. Último error: {last_exception}.")
-        if texto_para_fallback:
-            res_local = _extraer_lote_regex(texto_para_fallback, fincas_disponibles=fincas_disponibles)
-            if res_local.get('animales'):
-                res_local['aviso_banner'] = (
-                    "⚠️ El censo fue procesado mediante el analizador local debido a una saturación temporal "
-                    "en los servidores de IA. Revise la lista antes de guardar."
-                )
-                return res_local
+    if not texto_a_procesar:
         return {
             "intencion": "IMPORTAR_LOTE",
             "finca_nombre": None,
-            "animales": [],
-            "error": "Los servidores de Google AI están experimentando un pico de saturación temporal. Por favor, reintenta la subida del documento en unos instantes."
+            "error": "No se proporcionó ningún texto o documento para procesar.",
+            "animales": []
         }
 
-    # Modo sin API key
-    if texto_para_fallback:
-        return _extraer_lote_regex(texto_para_fallback, fincas_disponibles=fincas_disponibles)
+    client = get_groq_client()
+    if not client:
+        res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
+        if res_local.get("animales"):
+            return {
+                "intencion": "IMPORTAR_LOTE",
+                "finca_nombre": res_local.get("finca_nombre"),
+                "animales": res_local["animales"],
+                "error": None,
+                "aviso_banner": "El censo fue procesado mediante el analizador local."
+            }
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": None,
+            "error": "El servicio de IA requiere configurar la variable GROQ_API_KEY en el entorno.",
+            "animales": []
+        }
 
-    return {
-        "intencion": "IMPORTAR_LOTE",
-        "finca_nombre": None,
-        "animales": [],
-        "error": "El análisis de documentos PDF requiere configurar la variable GEMINI_API_KEY."
-    }
+    try:
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT_CENSO},
+                {
+                    "role": "user",
+                    "content": f"Extrae todos los animales del siguiente contenido respetando rigurosamente las instrucciones:\n\n{texto_a_procesar}"
+                }
+            ],
+            model=GROQ_DEFAULT_MODEL,
+            response_format={"type": "json_object"},
+            temperature=0.1,
+            max_completion_tokens=4096,
+        )
+
+        respuesta_raw = chat_completion.choices[0].message.content
+        datos = json.loads(respuesta_raw)
+        animales_extraidos = datos.get("animales", [])
+
+        animales_limpios = []
+        for a in animales_extraidos:
+            crotal_str = str(a.get("crotal", "")).strip().zfill(4)
+            if len(crotal_str) == 4 and crotal_str.isdigit():
+                a["crotal"] = crotal_str
+                if a.get("crotal_madre"):
+                    madre_str = str(a["crotal_madre"]).strip().zfill(4)
+                    a["crotal_madre"] = madre_str if (len(madre_str) == 4 and madre_str.isdigit()) else None
+                else:
+                    a["crotal_madre"] = None
+
+                sexo_raw = str(a.get("sexo", "H")).upper()
+                a["sexo"] = "M" if "M" in sexo_raw else "H"
+
+                sub = str(a.get("sub_ubicacion", "PASTO")).upper()
+                if "CEB" in sub:
+                    a["sub_ubicacion"] = "CEBADERO"
+                elif "APA" in sub:
+                    a["sub_ubicacion"] = "APARTADO"
+                elif "BAJ" in sub or "DEF" in sub:
+                    a["sub_ubicacion"] = "BAJA"
+                else:
+                    a["sub_ubicacion"] = "PASTO"
+
+                animales_limpios.append(a)
+
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": datos.get("finca_nombre"),
+            "animales": animales_limpios,
+            "error": None
+        }
+
+    except Exception as e:
+        logger.exception("Error procesando solicitud en Groq API")
+        if texto_a_procesar:
+            res_local = _extraer_lote_regex(texto_a_procesar, fincas_disponibles=fincas_disponibles)
+            if res_local.get("animales"):
+                return {
+                    "intencion": "IMPORTAR_LOTE",
+                    "finca_nombre": res_local.get("finca_nombre"),
+                    "animales": res_local["animales"],
+                    "error": None,
+                    "aviso_banner": "El censo fue procesado mediante el analizador local debido a una saturación temporal de la IA."
+                }
+
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": None,
+            "error": f"Error en el motor de IA (Groq): {str(e)}",
+            "animales": []
+        }

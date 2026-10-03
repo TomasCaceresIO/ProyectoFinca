@@ -6,9 +6,10 @@ from django.utils import timezone
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Incidencia, Ubicacion
 from ganaderia.services.ai_assistant import (
     procesar_comando_parto,
+    procesar_importacion_lote,
     _extraer_comando_parto_regex,
-    get_genai_client,
-    DEFAULT_GEMINI_MODEL,
+    get_groq_client,
+    GROQ_DEFAULT_MODEL,
 )
 from ganaderia.services.animal_services import registrar_parto
 
@@ -90,12 +91,13 @@ class AIAssistantTestCase(TestCase):
         self.assertFalse(response.context['puede_confirmar'])
         self.assertNotContains(response, "Confirmar y Guardar")
 
-    @override_settings(GEMINI_API_KEY="test-fake-key")
-    @patch("ganaderia.services.ai_assistant.genai.Client")
-    def test_extraccion_mock_gemini_llm(self, mock_client_class):
-        """2. Test unitario de extracción mediante mock de Gemini LLM (SDK google-genai)."""
-        mock_response = MagicMock()
-        mock_response.text = '''{
+    @override_settings(GROQ_API_KEY="test-fake-key")
+    @patch("ganaderia.services.ai_assistant.Groq")
+    def test_extraccion_mock_groq_llm(self, mock_groq_class):
+        """2. Test unitario de extracción mediante mock de Groq LLM (llama-3.3-70b-versatile)."""
+        mock_completion = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '''{
             "intencion": "REGISTRAR_PARTO",
             "crotal_madre": "3014",
             "fecha_parto": "2026-10-02",
@@ -104,9 +106,10 @@ class AIAssistantTestCase(TestCase):
             "cria_raza": "Limusina",
             "cria_recinto": "PASTO"
         }'''
+        mock_completion.choices = [mock_choice]
         mock_client = MagicMock()
-        mock_client.models.generate_content.return_value = mock_response
-        mock_client_class.return_value = mock_client
+        mock_client.chat.completions.create.return_value = mock_completion
+        mock_groq_class.return_value = mock_client
 
         resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
         self.assertEqual(resultado["intencion"], "REGISTRAR_PARTO")
@@ -115,21 +118,82 @@ class AIAssistantTestCase(TestCase):
         self.assertEqual(resultado["cria_sexo"], "H")
         self.assertEqual(resultado["cria_raza"], "Limusina")
         self.assertEqual(resultado["fecha_parto"], "2026-10-02")
-        # Verificar que se invocó con el modelo oficial gemini-3.8-flash
-        call_kwargs = mock_client.models.generate_content.call_args.kwargs
-        self.assertEqual(call_kwargs["model"], DEFAULT_GEMINI_MODEL)
-        self.assertEqual(DEFAULT_GEMINI_MODEL, "gemini-3.8-flash")
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        self.assertEqual(call_kwargs["model"], GROQ_DEFAULT_MODEL)
+        self.assertEqual(GROQ_DEFAULT_MODEL, "llama-3.3-70b-versatile")
+        self.assertEqual(call_kwargs["response_format"], {"type": "json_object"})
 
-    @override_settings(GEMINI_API_KEY="AQ_MOCK_KEY_FOR_TESTING_PURPOSES")
-    @patch("ganaderia.services.ai_assistant.genai.Client")
-    def test_client_accepts_aq_prefixed_token(self, mock_client_class):
-        """Test unitario: autenticación con tokens de nuevo formato 'AQ.' inicializa el cliente sin error."""
+    @override_settings(GROQ_API_KEY="gsk_mock_test_token_not_real")
+    @patch("ganaderia.services.ai_assistant.Groq")
+    def test_client_initialization_groq(self, mock_groq_class):
+        """Test unitario: autenticación con GROQ_API_KEY inicializa el cliente oficial sin error."""
         mock_client_instance = MagicMock()
-        mock_client_class.return_value = mock_client_instance
+        mock_groq_class.return_value = mock_client_instance
 
-        client = get_genai_client()
+        client = get_groq_client()
         self.assertIsNotNone(client)
-        mock_client_class.assert_called_once_with(api_key="AQ_MOCK_KEY_FOR_TESTING_PURPOSES")
+        mock_groq_class.assert_called_once_with(api_key="gsk_mock_test_token_not_real")
+
+    @override_settings(GROQ_API_KEY="test-fake-key")
+    @patch("ganaderia.services.ai_assistant.Groq")
+    def test_lote_importacion_groq_llm_columnas_desordenadas(self, mock_groq_class):
+        """Test importación de lote con Groq: 3 animales con columnas desordenadas, fechas históricas y fundadoras."""
+        mock_completion = MagicMock()
+        mock_choice = MagicMock()
+        mock_choice.message.content = '''{
+            "finca_nombre": "Finca Pruebas",
+            "animales": [
+                {
+                    "crotal": "1001",
+                    "sexo": "H",
+                    "fecha_nacimiento": "2018-03-12",
+                    "raza": "Limusina",
+                    "crotal_madre": null,
+                    "sub_ubicacion": "PASTO"
+                },
+                {
+                    "crotal": "1002",
+                    "sexo": "M",
+                    "fecha_nacimiento": "2019-07-20",
+                    "raza": "Retinta",
+                    "crotal_madre": "1001",
+                    "sub_ubicacion": "CEBADERO"
+                },
+                {
+                    "crotal": "1003",
+                    "sexo": "H",
+                    "fecha_nacimiento": "2020-01-15",
+                    "raza": "Charolesa",
+                    "crotal_madre": null,
+                    "sub_ubicacion": "PASTO"
+                }
+            ]
+        }'''
+        mock_completion.choices = [mock_choice]
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = mock_completion
+        mock_groq_class.return_value = mock_client
+
+        resultado = procesar_importacion_lote(texto="1001 H 2018-03-12 Limusina Fundadora | 1002 M Retinta 2019-07-20 Madre 1001 | 1003 H Charolesa 2020-01-15 -")
+        self.assertIsNone(resultado["error"])
+        self.assertEqual(len(resultado["animales"]), 3)
+
+        a1 = resultado["animales"][0]
+        self.assertEqual(a1["crotal"], "1001")
+        self.assertEqual(a1["sexo"], "H")
+        self.assertEqual(a1["fecha_nacimiento"], "2018-03-12")
+        self.assertIsNone(a1["crotal_madre"])
+
+        a2 = resultado["animales"][1]
+        self.assertEqual(a2["crotal"], "1002")
+        self.assertEqual(a2["sexo"], "M")
+        self.assertEqual(a2["crotal_madre"], "1001")
+        self.assertEqual(a2["sub_ubicacion"], "CEBADERO")
+
+        a3 = resultado["animales"][2]
+        self.assertEqual(a3["crotal"], "1003")
+        self.assertEqual(a3["sexo"], "H")
+        self.assertIsNone(a3["crotal_madre"])
 
     def test_preview_detecta_conflicto_270_dias_sin_tocar_bd(self):
         """3. Test preview con conflicto < 270 días: devuelve alerta roja y NO modifica la base de datos."""

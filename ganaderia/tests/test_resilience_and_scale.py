@@ -11,9 +11,7 @@ from ganaderia.services.ai_assistant import (
     normalizar_crotal,
     procesar_comando_parto,
     procesar_importacion_lote,
-    CANDIDATE_MODELS,
-    DEFAULT_GEMINI_MODEL,
-    genai_errors,
+    GROQ_DEFAULT_MODEL,
 )
 
 
@@ -126,7 +124,7 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
         t_elapsed = time.perf_counter() - t_start
 
         self.assertEqual(response_p1.status_code, 200)
-        self.assertLess(t_elapsed, 0.500)  # Verificación de rendimiento
+        self.assertLess(t_elapsed, 0.500)
         self.assertEqual(len(response_p1.context['page_obj']), 25)
         self.assertEqual(response_p1.context['paginator'].num_pages, 3)
 
@@ -148,19 +146,18 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
         self.assertEqual(response_filtro.status_code, 200)
         self.assertEqual(response_filtro.context['page_obj'].number, 1)
 
-    @override_settings(GEMINI_API_KEY='dummy_resilience_api_key')
+    @override_settings(GROQ_API_KEY='dummy_resilience_api_key')
     def test_ai_timeout_fallback(self):
         """
         4. Resiliencia y control de timeout en la IA:
-        Si Gemini API agota el tiempo de espera (o lanza TimeoutError),
+        Si Groq API agota el tiempo de espera (o lanza TimeoutError),
         la función procesar_comando_parto conmuta automáticamente al parser
         local sin devolver un error 500 al cliente.
         """
-        # Simular timeout en _llamar_gemini
-        with patch('ganaderia.services.ai_assistant._llamar_gemini', side_header=None) as mock_gemini:
+        with patch('ganaderia.services.ai_assistant._llamar_groq_parto') as mock_groq:
             def raise_timeout(*args, **kwargs):
                 raise FuturesTimeoutError("Simulated 8s Timeout")
-            mock_gemini.side_effect = raise_timeout
+            mock_groq.side_effect = raise_timeout
 
             texto = "La 3014 parió hoy ternera 5012 limusina"
             resultado = procesar_comando_parto(texto)
@@ -173,77 +170,56 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
             self.assertEqual(resultado["cria_raza"], "Limusina")
             self.assertNotIn("error", resultado)
 
-    @override_settings(GEMINI_API_KEY='test_api_key_503')
-    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
-    def test_fallback_ladder_conmuta_tras_503(self, mock_sleep):
+    @override_settings(GROQ_API_KEY='test_api_key_error')
+    def test_fallback_conmuta_tras_error_api(self):
         """
-        5. Reintentos ante 503 (High demand) y conmutación a fallback regex si se agotan:
-        Si el modelo falla con 503, realiza los 3 reintentos antes de abandonar y pasar al fallback regex.
+        5. Conmutación a fallback regex si la API de Groq lanza una excepción o error:
         """
-        intentos = []
-
-        def simular_llamada(*args, **kwargs):
-            modelo = kwargs.get('model')
-            intentos.append(modelo)
-            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'The model is overloaded. Please try again later.'}})
-
-        with patch('ganaderia.services.ai_assistant._llamar_gemini', side_effect=simular_llamada):
+        with patch('ganaderia.services.ai_assistant._llamar_groq_parto', side_effect=Exception("Connection error or rate limit")):
             resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
             self.assertEqual(resultado["crotal_madre"], "3014")
             self.assertEqual(resultado["cria_crotal"], "5012")
-            # Debe haber intentado con DEFAULT_GEMINI_MODEL (1 llamada + 3 reintentos = 4 veces)
-            self.assertEqual(intentos.count(DEFAULT_GEMINI_MODEL), 4)
+            self.assertEqual(resultado["cria_sexo"], "H")
+            self.assertEqual(resultado["cria_raza"], "Limusina")
 
-    @override_settings(GEMINI_API_KEY='test_api_key_404')
-    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
-    def test_salto_inmediato_tras_404(self, mock_sleep):
+    @override_settings(GROQ_API_KEY='test_api_key_saturacion')
+    def test_lote_preview_mensaje_amigable_sin_texto_ni_ocr(self):
         """
-        6. Salto inmediato ante 404: si un modelo responde 404, no reintenta y pasa inmediatamente al fallback sin demora.
+        6. Mensaje amigable al usuario en /asistente/lote-preview/ si no se puede extraer texto plano de un binario no parseable.
         """
-        intentos = []
+        from django.core.files.uploadedfile import SimpleUploadedFile
+        pdf_dummy = SimpleUploadedFile("censo.pdf", b"DATOS_BINARIOS_INVALIDOS_SIN_TEXTO", content_type="application/pdf")
+        client = Client()
+        res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_dummy})
+        self.assertEqual(res.status_code, 200)
+        self.assertContains(res, "No se pudo extraer texto digital del documento PDF adjunto")
 
-        def simular_llamada(*args, **kwargs):
-            modelo = kwargs.get('model')
-            intentos.append(modelo)
-            raise genai_errors.APIError(404, {'error': {'code': 404, 'message': 'models/gemini-3.8-flash is not found'}})
-
-        with patch('ganaderia.services.ai_assistant._llamar_gemini', side_effect=simular_llamada):
-            resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
-            self.assertEqual(resultado["crotal_madre"], "3014")
-            # Con 404 solo debe llamarse 1 vez a DEFAULT_GEMINI_MODEL sin reintentos
-            self.assertEqual(intentos.count(DEFAULT_GEMINI_MODEL), 1)
-
-    @override_settings(GEMINI_API_KEY='test_api_key_503_global')
-    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
-    def test_lote_preview_mensaje_amigable_saturacion(self, mock_sleep):
+    @override_settings(GROQ_API_KEY='test_api_key_pdf_fallback')
+    def test_pdf_extractor_local_y_fallback_regex(self):
         """
-        7. Mensaje amigable al usuario en /asistente/lote-preview/ si todos los modelos devuelven 503
-        y no se puede extraer texto plano de un binario no parseable.
+        7. Si se recibe un PDF con texto digital, el sistema extrae el texto del PDF y parsea los animales.
         """
-        def simular_503_todos(*args, **kwargs):
-            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
-
-        with patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503_todos):
-            from django.core.files.uploadedfile import SimpleUploadedFile
-            pdf_dummy = SimpleUploadedFile("censo.pdf", b"DATOS_BINARIOS_INVALIDOS_SIN_TEXTO", content_type="application/pdf")
-            client = Client()
-            res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_dummy})
-            self.assertEqual(res.status_code, 200)
-            self.assertContains(res, "Los servidores de Google AI están experimentando un pico de saturación temporal")
-
-    @override_settings(GEMINI_API_KEY='test_api_key_pdf_fallback')
-    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
-    def test_pdf_extractor_local_y_fallback_regex(self, mock_sleep):
-        """
-        8. Si se recibe un PDF con texto útil digital, el sistema aplica la estrategia Local-First
-        extrayendo directamente los animales en local de forma inmediata.
-        """
-        with patch('ganaderia.services.ai_assistant.PdfReader') as mock_reader_cls:
+        with patch('ganaderia.services.ai_assistant.PdfReader') as mock_reader_cls, \
+             patch('ganaderia.services.ai_assistant.Groq') as mock_groq_cls:
             mock_page = MagicMock()
             mock_page.extract_text.return_value = "Animal 7001 macho limusin y 7002 hembra en pasto"
             mock_instance = MagicMock()
             mock_instance.pages = [mock_page]
             mock_reader_cls.return_value = mock_instance
+
+            mock_completion = MagicMock()
+            mock_choice = MagicMock()
+            mock_choice.message.content = '''{
+                "finca_nombre": null,
+                "animales": [
+                    {"crotal": "7001", "sexo": "M", "raza": "Limusina", "fecha_nacimiento": null, "crotal_madre": null, "sub_ubicacion": "PASTO"},
+                    {"crotal": "7002", "sexo": "H", "raza": "Limusina", "fecha_nacimiento": null, "crotal_madre": null, "sub_ubicacion": "PASTO"}
+                ]
+            }'''
+            mock_completion.choices = [mock_choice]
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.return_value = mock_completion
+            mock_groq_cls.return_value = mock_client
 
             from django.core.files.uploadedfile import SimpleUploadedFile
             pdf_file = SimpleUploadedFile("censo.pdf", b"%PDF-1.4 dummy", content_type="application/pdf")
@@ -254,18 +230,17 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
             self.assertContains(res, "7001")
             self.assertContains(res, "7002")
 
-    @override_settings(GEMINI_API_KEY='test_api_key_503_fallback')
-    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
-    def test_fallback_banner_cuando_gemini_falla_con_503(self, mock_sleep):
+    @override_settings(GROQ_API_KEY='test_api_key_fallback')
+    def test_fallback_banner_cuando_groq_falla(self):
         """
-        9. Si Gemini falla con 503 y se dispone de texto para fallback, devuelve la previsualización
-        con el aviso banner informativo.
+        8. Si Groq falla y se dispone de texto para fallback, devuelve la previsualización
+        con el aviso banner informativo mediante el analizador local.
         """
-        def simular_503(*args, **kwargs):
-            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
+        with patch('ganaderia.services.ai_assistant.Groq') as mock_groq_cls:
+            mock_client = MagicMock()
+            mock_client.chat.completions.create.side_effect = Exception("Service unavailable 503")
+            mock_groq_cls.return_value = mock_client
 
-        with patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503):
-            # Enviar texto libre donde se invoca la API y falla con 503
             client = Client()
             res = client.post(reverse('asistente_lote_preview'), {'texto': "Añade al pasto los animales 7001 macho limusin y 7002 hembra"})
             self.assertEqual(res.status_code, 200)
