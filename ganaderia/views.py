@@ -13,6 +13,7 @@ from django.http import JsonResponse, HttpResponse, Http404
 from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 
 from .models import Explotacion, Finca, Ubicacion, Animal, Parto, Incidencia
 from .forms import (
@@ -115,6 +116,7 @@ def explotacion_edit(request):
     return render(request, 'ganaderia/explotacion_form.html', {'form': form, 'explotacion': explotacion})
 
 
+@ensure_csrf_cookie
 def home(request):
     """Panel de control principal y Censo Activo (Home Data Grid)."""
     explotacion = Explotacion.objects.first()
@@ -689,6 +691,7 @@ def api_validar_crotal(request):
     return JsonResponse(resultado)
 
 
+@csrf_exempt
 def asistente_preview(request):
     """
     Procesa un comando de lenguaje natural (texto o audio) para registrar un parto.
@@ -830,6 +833,7 @@ def asistente_preview(request):
     })
 
 
+@csrf_exempt
 def asistente_ejecutar(request):
     """
     Ejecuta atómicamente el registro del parto y la cría confirmados desde el asistente de IA.

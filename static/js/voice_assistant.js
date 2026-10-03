@@ -12,10 +12,25 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
     }
 
-    // Obtener token CSRF
+    // Función extractora estándar de cookies de Django
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    // Obtener token CSRF desde cookie o input del DOM
     function getCsrfToken() {
-        const cookie = document.cookie.split('; ').find(row => row.startsWith('csrftoken='));
-        return cookie ? cookie.split('=')[1] : '';
+        return getCookie('csrftoken') || document.querySelector('[name=csrfmiddlewaretoken]')?.value || '';
     }
 
     // Cerrar modal
@@ -30,12 +45,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const originalText = btnSubmit.innerHTML;
         btnSubmit.innerHTML = '⏳ Analizando...';
 
+        const token = getCsrfToken();
+        if (data instanceof FormData && token && !data.has('csrfmiddlewaretoken')) {
+            data.append('csrfmiddlewaretoken', token);
+        }
+
         try {
+            const headers = {};
+            if (token) {
+                headers['X-CSRFToken'] = token;
+            }
+
             const response = await fetch('/asistente/preview/', {
                 method: 'POST',
-                headers: {
-                    'X-CSRFToken': getCsrfToken(),
-                },
+                headers: headers,
                 body: data,
             });
 

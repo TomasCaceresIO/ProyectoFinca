@@ -209,3 +209,14 @@ class AIAssistantTestCase(TestCase):
         incidencia = Incidencia.objects.filter(parto=parto, tipo='ROJO').first()
         self.assertIsNotNone(incidencia)
         self.assertFalse(incidencia.resuelta)
+
+    def test_csrf_enforced_requests_succeed(self):
+        """8. Test de protección CSRF: peticiones con enforce_csrf_checks=True no son bloqueadas con 403."""
+        csrf_client = Client(enforce_csrf_checks=True)
+        url_preview = reverse('asistente_preview')
+        response = csrf_client.post(url_preview, {
+            'texto': 'La 3014 parió hoy ternera 7777 retinta'
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, '7777')
+
