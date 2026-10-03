@@ -177,70 +177,41 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
     @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
     def test_fallback_ladder_conmuta_tras_503(self, mock_sleep):
         """
-        5. Escalera de modelos de respaldo:
-        Si el modelo principal falla con 503 (High demand) agotando los reintentos,
-        o falla con 404 (salto inmediato), conmuta al siguiente modelo candidato
-        y tiene éxito sin elevar error 500 al cliente.
+        5. Reintentos ante 503 (High demand) y conmutación a fallback regex si se agotan:
+        Si el modelo falla con 503, realiza los 3 reintentos antes de abandonar y pasar al fallback regex.
         """
         intentos = []
 
         def simular_llamada(*args, **kwargs):
             modelo = kwargs.get('model')
             intentos.append(modelo)
-            if modelo == DEFAULT_GEMINI_MODEL:
-                # Simular error 503 de saturación de servidores
-                raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'The model is overloaded. Please try again later.'}})
-            # El segundo modelo candidato responde con éxito
-            return {
-                "intencion": "REGISTRAR_PARTO",
-                "crotal_madre": "3014",
-                "fecha_parto": "2026-10-02",
-                "cria_crotal": "5012",
-                "cria_sexo": "H",
-                "cria_raza": "Limusina",
-                "cria_recinto": "PASTO",
-                "cria_finca": None,
-            }
+            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'The model is overloaded. Please try again later.'}})
 
         with patch('ganaderia.services.ai_assistant._llamar_gemini', side_effect=simular_llamada):
             resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
             self.assertEqual(resultado["crotal_madre"], "3014")
             self.assertEqual(resultado["cria_crotal"], "5012")
             # Debe haber intentado con DEFAULT_GEMINI_MODEL (1 llamada + 3 reintentos = 4 veces)
-            # y luego con CANDIDATE_MODELS[1] ('gemini-3.8-pro')
             self.assertEqual(intentos.count(DEFAULT_GEMINI_MODEL), 4)
-            self.assertIn("gemini-3.8-pro", intentos)
 
     @override_settings(GEMINI_API_KEY='test_api_key_404')
     @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
     def test_salto_inmediato_tras_404(self, mock_sleep):
         """
-        6. Salto inmediato ante 404: si un modelo responde 404, no reintenta y pasa inmediatamente al siguiente.
+        6. Salto inmediato ante 404: si un modelo responde 404, no reintenta y pasa inmediatamente al fallback sin demora.
         """
         intentos = []
 
         def simular_llamada(*args, **kwargs):
             modelo = kwargs.get('model')
             intentos.append(modelo)
-            if modelo == DEFAULT_GEMINI_MODEL:
-                raise genai_errors.APIError(404, {'error': {'code': 404, 'message': 'models/gemini-3.8-flash is not found'}})
-            return {
-                "intencion": "REGISTRAR_PARTO",
-                "crotal_madre": "3014",
-                "fecha_parto": "2026-10-02",
-                "cria_crotal": "5012",
-                "cria_sexo": "H",
-                "cria_raza": "Limusina",
-                "cria_recinto": "PASTO",
-                "cria_finca": None,
-            }
+            raise genai_errors.APIError(404, {'error': {'code': 404, 'message': 'models/gemini-3.8-flash is not found'}})
 
         with patch('ganaderia.services.ai_assistant._llamar_gemini', side_effect=simular_llamada):
             resultado = procesar_comando_parto("La 3014 parió hoy ternera 5012 limusina")
             self.assertEqual(resultado["crotal_madre"], "3014")
             # Con 404 solo debe llamarse 1 vez a DEFAULT_GEMINI_MODEL sin reintentos
             self.assertEqual(intentos.count(DEFAULT_GEMINI_MODEL), 1)
-            self.assertIn("gemini-3.8-pro", intentos)
 
     @override_settings(GEMINI_API_KEY='test_api_key_503_global')
     @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
@@ -264,21 +235,10 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
     @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
     def test_pdf_extractor_local_y_fallback_regex(self, mock_sleep):
         """
-        8. Si se recibe un PDF con texto útil y todos los modelos de Gemini devuelven 503,
-        el sistema ejecuta el analizador heurístico local (_extraer_lote_regex)
-        y muestra la lista de animales con el banner informativo de advertencia.
+        8. Si se recibe un PDF con texto útil digital, el sistema aplica la estrategia Local-First
+        extrayendo directamente los animales en local de forma inmediata.
         """
-        def simular_503_todos(*args, **kwargs):
-            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
-
-        # Crear un PDF sintético mínimo con pypdf
-        from pypdf import PdfWriter
-        import io
-        writer = PdfWriter()
-        writer.add_blank_page(width=200, height=200)
-        # Mock de PdfReader para simular extracción de texto útil
-        with patch('ganaderia.services.ai_assistant.PdfReader') as mock_reader_cls, \
-             patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503_todos):
+        with patch('ganaderia.services.ai_assistant.PdfReader') as mock_reader_cls:
             mock_page = MagicMock()
             mock_page.extract_text.return_value = "Animal 7001 macho limusin y 7002 hembra en pasto"
             mock_instance = MagicMock()
@@ -290,6 +250,24 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
             client = Client()
             res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_file})
 
+            self.assertEqual(res.status_code, 200)
+            self.assertContains(res, "7001")
+            self.assertContains(res, "7002")
+
+    @override_settings(GEMINI_API_KEY='test_api_key_503_fallback')
+    @patch('ganaderia.services.ai_assistant.time.sleep', return_value=None)
+    def test_fallback_banner_cuando_gemini_falla_con_503(self, mock_sleep):
+        """
+        9. Si Gemini falla con 503 y se dispone de texto para fallback, devuelve la previsualización
+        con el aviso banner informativo.
+        """
+        def simular_503(*args, **kwargs):
+            raise genai_errors.APIError(503, {'error': {'code': 503, 'message': 'High demand'}})
+
+        with patch('ganaderia.services.ai_assistant._llamar_gemini_lote', side_effect=simular_503):
+            # Enviar texto libre donde se invoca la API y falla con 503
+            client = Client()
+            res = client.post(reverse('asistente_lote_preview'), {'texto': "Añade al pasto los animales 7001 macho limusin y 7002 hembra"})
             self.assertEqual(res.status_code, 200)
             self.assertContains(res, "7001")
             self.assertContains(res, "7002")

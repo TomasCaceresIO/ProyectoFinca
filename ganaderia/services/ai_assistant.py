@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 DEFAULT_GEMINI_MODEL = "gemini-3.8-flash"
 CANDIDATE_MODELS = [
     "gemini-3.8-flash",
-    "gemini-3.8-pro",
 ]
 
 
@@ -550,13 +549,175 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
     }
 
 
+def _extraer_tabla_pdf_dinamica(texto: str, fincas_disponibles: list = None) -> list:
+    """
+    Parser heurístico dinámico para tablas de documentos PDF de censo con columnas en orden variable.
+    Detecta la cabecera por palabras clave y mapea la posición/índice de cada columna.
+    Extrae fila a fila evitando solapamientos entre crotales, fechas, órdenes o razas.
+    """
+    lineas = [ln.strip() for ln in texto.splitlines() if ln.strip()]
+    if not lineas:
+        return []
+
+    # 1. Buscar la fila de encabezados
+    header_idx = -1
+    col_map = {}  # 'crotal': idx, 'sexo': idx, ...
+
+    for i, linea in enumerate(lineas):
+        linea_lower = linea.lower()
+        # Una línea de cabecera debe contener al menos dos de estas palabras clave
+        kw_hits = sum(1 for kw in ["crotal", "identificador", "chapa", "sexo", "sex", "nacimiento", "f. nac", "fecha", "raza", "madre", "ubicación", "recinto"] if kw in linea_lower)
+        if kw_hits >= 2 and ("crotal" in linea_lower or "identificador" in linea_lower or "chapa" in linea_lower):
+            # Posible fila de cabecera
+            # Dividir por separadores: '|', '\t', o 2 o más espacios
+            partes = [p.strip() for p in re.split(r'\||\t|\s{2,}', linea) if p.strip()]
+            if len(partes) >= 2:
+                # Mapear cada columna por nombre
+                temp_map = {}
+                for idx, p in enumerate(partes):
+                    p_l = p.lower()
+                    if any(k in p_l for k in ["crotal", "identificador", "chapa"]):
+                        temp_map['crotal'] = idx
+                    elif any(k in p_l for k in ["sexo", "sex"]):
+                        temp_map['sexo'] = idx
+                    elif any(k in p_l for k in ["nacimiento", "f. nac", "fecha nac", "f.nac"]):
+                        temp_map['fecha_nacimiento'] = idx
+                    elif "fecha" in p_l and 'fecha_nacimiento' not in temp_map:
+                        temp_map['fecha_nacimiento'] = idx
+                    elif any(k in p_l for k in ["raza", "breed"]):
+                        temp_map['raza'] = idx
+                    elif any(k in p_l for k in ["madre", "genealogía", "genealogia", "dam"]):
+                        temp_map['crotal_madre'] = idx
+                    elif any(k in p_l for k in ["ubicación", "ubicacion", "recinto", "destino"]):
+                        temp_map['sub_ubicacion'] = idx
+
+                if 'crotal' in temp_map:
+                    header_idx = i
+                    col_map = temp_map
+                    break
+
+    if header_idx == -1 or 'crotal' not in col_map:
+        return []
+
+    animales_extraidos = []
+
+    # 2. Iterar filas siguientes
+    for linea in lineas[header_idx + 1:]:
+        linea_l = linea.lower()
+        # Ignorar líneas de pie de página, totales o cabeceras repetidas
+        if any(term in linea_l for term in ["página", "pagina", "total", "resumen", "diputación", "diputacion", "explotación", "explotacion"]):
+            continue
+        # Ignorar si es otra cabecera repetida
+        if "crotal" in linea_l and ("sexo" in linea_l or "raza" in linea_l):
+            continue
+
+        # Dividir celdas con el mismo criterio
+        celdas = [c.strip() for c in re.split(r'\||\t|\s{2,}', linea) if c.strip()]
+        if not celdas:
+            continue
+
+        # Extraer crotal según el índice mapeado
+        idx_crotal = col_map.get('crotal')
+        if idx_crotal is None or idx_crotal >= len(celdas):
+            continue
+
+        val_crotal_raw = celdas[idx_crotal]
+        # Buscar el token de 4 dígitos numéricos en la celda del crotal
+        m_crotal = re.search(r'\b(\d{4})\b', val_crotal_raw)
+        if not m_crotal:
+            # Reintentar si tiene 1-3 dígitos y rellenar con ceros
+            m_crotal = re.search(r'\b(\d{1,4})\b', val_crotal_raw)
+            if not m_crotal:
+                continue
+            crotal = normalizar_crotal(m_crotal.group(1))
+        else:
+            crotal = m_crotal.group(1)
+
+        if not crotal or len(crotal) != 4 or not crotal.isdigit():
+            continue
+
+        # Sexo
+        sexo = 'H'
+        idx_sexo = col_map.get('sexo')
+        if idx_sexo is not None and idx_sexo < len(celdas):
+            val_sexo = celdas[idx_sexo].strip().lower()
+            if any(s in val_sexo for s in ["hembra", "vaca", "novilla"]) or val_sexo == "h":
+                sexo = 'H'
+            elif any(s in val_sexo for s in ["macho", "toro", "buey"]) or val_sexo == "m":
+                sexo = 'M'
+            elif "h" in val_sexo and "m" not in val_sexo:
+                sexo = 'H'
+            elif "m" in val_sexo and "h" not in val_sexo:
+                sexo = 'M'
+
+        # Raza
+        raza = 'Limusina'
+        idx_raza = col_map.get('raza')
+        if idx_raza is not None and idx_raza < len(celdas):
+            val_raza = celdas[idx_raza].lower()
+            for r_key, r_nom in [
+                ("limusin", "Limusina"), ("limosina", "Limusina"), ("charol", "Charolesa"),
+                ("retinta", "Retinta"), ("morucha", "Morucha"), ("angus", "Angus"),
+                ("frisona", "Frisona"), ("avileña", "Avileña-Negra Ibérica"), ("cruzad", "Cruzado")
+            ]:
+                if r_key in val_raza:
+                    raza = r_nom
+                    break
+
+        # Fecha de nacimiento
+        fecha_nac = None
+        idx_fnac = col_map.get('fecha_nacimiento')
+        if idx_fnac is not None and idx_fnac < len(celdas):
+            val_fnac = celdas[idx_fnac]
+            m_f = re.search(r'\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b', val_fnac)
+            if m_f:
+                d, m, y = map(int, m_f.groups())
+                try:
+                    fecha_nac = date(y, m, d).strftime('%Y-%m-%d')
+                except ValueError:
+                    fecha_nac = None
+
+        # Madre
+        crotal_madre = None
+        idx_madre = col_map.get('crotal_madre')
+        if idx_madre is not None and idx_madre < len(celdas):
+            val_madre = celdas[idx_madre].strip().lower()
+            if not any(f in val_madre for f in ["fundador", "fundadora", "sin madre", "-", "null", "none"]):
+                m_mad = re.search(r'\b(\d{1,4})\b', val_madre)
+                if m_mad:
+                    crotal_madre = normalizar_crotal(m_mad.group(1))
+
+        # Recinto / Sub-ubicación
+        sub_ubicacion = 'PASTO'
+        idx_ubic = col_map.get('sub_ubicacion')
+        if idx_ubic is not None and idx_ubic < len(celdas):
+            val_ubic = celdas[idx_ubic].upper()
+            if "CEBADERO" in val_ubic:
+                sub_ubicacion = 'CEBADERO'
+            elif "APARTADO" in val_ubic:
+                sub_ubicacion = 'APARTADO'
+            elif "BAJA" in val_ubic:
+                sub_ubicacion = 'BAJA'
+
+        animales_extraidos.append({
+            "crotal": crotal,
+            "sexo": sexo,
+            "raza": raza,
+            "fecha_nacimiento": fecha_nac,
+            "crotal_madre": crotal_madre,
+            "sub_ubicacion": sub_ubicacion,
+        })
+
+    return animales_extraidos
+
+
 def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
     """
     Parser simulado / fallback para importar lotes de animales a partir de texto o dictado.
-    Identifica múltiples crotales, sexo, raza, año/fecha y si tienen madre o son fundadores.
+    Primero intenta analizar como tabla estructurada dinámica por encabezados.
+    Si no detecta tabla, recurre al parser de lenguaje natural / regex libre.
     """
     texto_lower = texto.lower()
-    hoy = timezone.now().date()
 
     # 1. Detectar finca si se menciona
     finca_detectada = None
@@ -570,7 +731,16 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
         if m_f:
             finca_detectada = m_f.group(1).title()
 
-    # 2. Recinto global
+    # Intentar extracción tabular dinámica por encabezados
+    animales_tabla = _extraer_tabla_pdf_dinamica(texto, fincas_disponibles=fincas_disponibles)
+    if animales_tabla:
+        return {
+            "intencion": "IMPORTAR_LOTE",
+            "finca_nombre": finca_detectada,
+            "animales": animales_tabla,
+        }
+
+    # Recinto global
     recinto_global = "PASTO"
     if "cebadero" in texto_lower:
         recinto_global = "CEBADERO"
@@ -583,10 +753,6 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
     if m_anio:
         anio_nacimiento = m_anio.group(1)
 
-    # 4. Dividir por segmentos o encontrar patrones de animales
-    # Ej: "Añade al pasto los animales 4001 macho limusín, 4002 hembra charolesa y 4003 hembra sin madre nacidos en 2024"
-    # Buscar ocurrencias de crotales
-    # Tokens o patrones: (\d{1,4})\s*(macho|hembra|ternero|ternera)?...
     animales_extraidos = []
     
     # Encontrar todas las menciones a números candidatos
@@ -600,7 +766,6 @@ def _extraer_lote_regex(texto: str, fincas_disponibles: list = None) -> dict:
         posiciones.append((c.start(), c.end(), val))
 
     for idx, (start, end, crotal_raw) in enumerate(posiciones):
-        # Tomar la ventana de texto alrededor de este crotal hasta el siguiente crotal
         next_start = posiciones[idx + 1][0] if idx + 1 < len(posiciones) else len(texto)
         ventana = texto[start:next_start].lower()
 
@@ -721,17 +886,18 @@ def _llamar_gemini_lote(texto=None, archivo_bytes=None, mime_type='application/p
 def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='application/pdf', fincas_disponibles: list = None) -> dict:
     """
     Punto de entrada principal para importar lotes de animales (PDF oficial o texto/dictado).
-    Estrategia híbrida de alta resiliencia:
-    1. Si es PDF, intenta extraer texto plano en local mediante pypdf. Si tiene contenido útil,
-       usa ese texto plano en lugar del archivo binario pesado.
-    2. Itera sobre CANDIDATE_MODELS con reintentos [2.0, 4.0, 6.0]s en 503 UNAVAILABLE
-       y salto inmediato en 404 NOT_FOUND.
-    3. Si todos los modelos fallan pero se dispone de texto extraído (o texto original),
-       ejecuta el parser heurístico local con un aviso banner explicativo.
+    Estrategia Local-First y resiliencia de API:
+    1. Si el archivo PDF contiene texto digital extraíble (pypdf.extract_text()):
+       Se procesa directamente con el parser local de encabezados dinámicos (_extraer_tabla_pdf_dinamica).
+       Si detecta animales, devuelve el resultado de inmediato con alta velocidad y cero dependencia de cuota externa.
+    2. Si el PDF no contiene texto plano (es un documento escaneado/imagen) o la extracción devuelve 0 animales:
+       Invoca la API de Gemini multimodal con los bytes del archivo.
+    3. Si la llamada a Gemini arroja 503 UNAVAILABLE: no bloquear la interfaz; muestra mensaje descriptivo y
+       da la opción de contingencia.
     """
     api_key = getattr(settings, 'GEMINI_API_KEY', '') or ''
 
-    # 1. Extractor local de texto como primera opción si se recibe PDF
+    # 1. Extractor local de texto como primera opción si se recibe PDF (Estrategia Local-First)
     texto_extraido_pdf = ""
     if archivo_bytes and PdfReader is not None:
         try:
@@ -740,16 +906,24 @@ def procesar_importacion_lote(texto=None, archivo_bytes=None, mime_type='applica
                 texto_extraido_pdf += (page.extract_text() or "") + "\n"
             texto_extraido_pdf = texto_extraido_pdf.strip()
             if texto_extraido_pdf:
-                logger.info(f"Texto extraído del PDF exitosamente ({len(texto_extraido_pdf)} caracteres). Se enviará como texto.")
+                logger.info(f"Texto digital extraído del PDF ({len(texto_extraido_pdf)} caracteres). Intentando procesamiento Local-First.")
+                # Procesar directamente con el parser local dinámico
+                res_local = _extraer_lote_regex(texto_extraido_pdf, fincas_disponibles=fincas_disponibles)
+                if res_local.get('animales') and len(res_local['animales']) > 0:
+                    logger.info(f"Extracción local completada exitosamente: {len(res_local['animales'])} animales detectados.")
+                    return res_local
         except Exception as e:
             logger.warning(f"No se pudo extraer texto plano del PDF: {e}")
 
-    # Determinar qué enviar al LLM: si tenemos texto_extraido_pdf, preferimos texto antes que binario
-    llm_texto = texto
-    llm_archivo_bytes = archivo_bytes
-    if texto_extraido_pdf:
-        llm_texto = texto_extraido_pdf
-        llm_archivo_bytes = None  # No enviar archivo pesado si ya tenemos el texto
+    # Si es texto plano directo del usuario (dictado o texto libre)
+    if texto and not archivo_bytes:
+        # Intentar parser local dinámico / regex primero si no hay API key o como fallback rápido
+        if not api_key.strip():
+            return _extraer_lote_regex(texto, fincas_disponibles=fincas_disponibles)
+
+    # 2. Solo si el PDF no contiene texto plano (documento escaneado/imagen) o es texto/dictado complejo:
+    llm_texto = texto or texto_extraido_pdf
+    llm_archivo_bytes = archivo_bytes if not texto_extraido_pdf else None
 
     texto_para_fallback = texto or texto_extraido_pdf
 
