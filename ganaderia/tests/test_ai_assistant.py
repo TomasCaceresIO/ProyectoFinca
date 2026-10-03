@@ -120,7 +120,7 @@ class AIAssistantTestCase(TestCase):
         self.assertEqual(resultado["fecha_parto"], "2026-10-02")
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
         self.assertEqual(call_kwargs["model"], GROQ_DEFAULT_MODEL)
-        self.assertEqual(GROQ_DEFAULT_MODEL, "llama-3.1-8b-instant")
+        self.assertEqual(GROQ_DEFAULT_MODEL, "openai/gpt-oss-120b")
         self.assertEqual(call_kwargs["response_format"], {"type": "json_object"})
 
     @override_settings(GROQ_API_KEY="test-fake-key")
@@ -140,7 +140,7 @@ class AIAssistantTestCase(TestCase):
 
         mock_client = MagicMock()
         def side_effect_models(*args, **kwargs):
-            if kwargs.get("model") == "llama-3.1-8b-instant":
+            if kwargs.get("model") == "openai/gpt-oss-120b":
                 raise NotFoundError("Model not found", response=MagicMock(status_code=404), body={"error": "model_not_found"})
             return mock_completion
 
@@ -152,8 +152,8 @@ class AIAssistantTestCase(TestCase):
         self.assertEqual(len(resultado["animales"]), 1)
         self.assertEqual(resultado["animales"][0]["crotal"], "9901")
         llamadas_modelos = [call.kwargs.get("model") for call in mock_client.chat.completions.create.call_args_list]
-        self.assertIn("llama-3.1-8b-instant", llamadas_modelos)
-        self.assertIn("qwen/qwen3.8-27b", llamadas_modelos)
+        self.assertIn("openai/gpt-oss-120b", llamadas_modelos)
+        self.assertIn("openai/gpt-oss-20b", llamadas_modelos)
 
     @override_settings(GROQ_API_KEY="gsk_mock_test_token_not_real")
     @patch("ganaderia.services.ai_assistant.Groq")
