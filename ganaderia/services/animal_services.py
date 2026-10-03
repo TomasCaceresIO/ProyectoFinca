@@ -41,21 +41,6 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
             'animal_baja': None,
         }
     
-    qs_baja = Animal.objects.filter(crotal=crotal, estado_vital='BAJA')
-    animal_baja = qs_baja.last()
-    
-    if animal_baja:
-        return {
-            'valido': True,
-            'bloqueante': False,
-            'alerta': 'AMARILLO',
-            'mensaje': (
-                f'RN-03: El crotal {crotal} fue usado por un animal dado de baja '
-                f'el {animal_baja.fecha_baja}. ¿Desea asignar igualmente?'
-            ),
-            'animal_baja': animal_baja,
-        }
-    
     return {
         'valido': True,
         'bloqueante': False,
@@ -226,15 +211,6 @@ def registrar_parto(
             parto=parto,
         )
 
-    for cria_obj, val_c in crias_creadas:
-        if val_c.get('alerta') == 'AMARILLO':
-            Incidencia.objects.create(
-                animal=cria_obj,
-                tipo='AMARILLO',
-                descripcion=f'Se reutilizó el crotal {cria_obj.crotal} previamente asignado a un animal en baja.',
-                parto=parto,
-            )
-
     return {
         'parto': parto,
         'cria': cria_1,
@@ -309,10 +285,18 @@ def trasladar_animal(animal: Animal, nueva_finca: Finca, nueva_sub_ubicacion: st
 def dar_de_baja_animal(animal: Animal, motivo: str = '') -> Animal:
     """
     Da de baja un animal (estado_vital = 'BAJA').
-    Sus partos e hijos permanecen intactos.
+    Sus partos e hijos permanecen intactos en genealogía, pero se desactivan
+    sus alertas de intervalo y se resuelven las incidencias vinculadas.
     """
     animal.estado_vital = 'BAJA'
     animal.fecha_baja = timezone.now().date()
     animal.motivo_baja = motivo
     animal.save()
+
+    # Desactivar alertas de intervalo en partos como madre
+    animal.partos_como_madre.filter(alerta_intervalo=True).update(alerta_intervalo=False)
+    # Resolver incidencias vinculadas a esos partos o a la madre
+    Incidencia.objects.filter(parto__madre=animal).update(resuelta=True)
+    Incidencia.objects.filter(animal=animal, tipo='ROJO').update(resuelta=True)
+
     return animal

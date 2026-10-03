@@ -214,36 +214,12 @@ def animal_edit(request, crotal):
         raise Http404('Animal no encontrado')
 
     form = AnimalForm(request.POST or None, instance=animal)
-    alerta_amarilla = None
 
     if request.method == 'POST':
         if form.is_valid():
-            alerta_amarilla = getattr(form, '_crotal_alerta', None)
-            if alerta_amarilla == 'AMARILLO' and not request.POST.get('confirmar_crotal_historico'):
-                animal.refresh_from_db()
-                partos = animal.partos_como_madre.select_related('cria', 'cria2').order_by('-fecha_parto')
-                return render(request, 'ganaderia/animal_detail.html', {
-                    'animal': animal,
-                    'partos': partos,
-                    'incidencias': animal.incidencias.all(),
-                    'edit_form': form,
-                    'alerta_amarilla_edit': True,
-                    'mensaje_alerta_edit': getattr(form, '_crotal_mensaje', ''),
-                    'open_edit_modal': True,
-                })
-
             with transaction.atomic():
                 animal_actualizado = form.save()
-
-                if alerta_amarilla == 'AMARILLO':
-                    Incidencia.objects.create(
-                        animal=animal_actualizado,
-                        tipo='AMARILLO',
-                        descripcion=f'Se reutilizó el crotal {animal_actualizado.crotal} previamente asignado a un animal en baja.'
-                    )
-                    messages.warning(request, f'⚠️ Animal {animal_actualizado.crotal} actualizado con aviso de crotal histórico.')
-                else:
-                    messages.success(request, f'✅ Datos del animal {animal_actualizado.crotal} actualizados correctamente.')
+                messages.success(request, f'✅ Datos del animal {animal_actualizado.crotal} actualizados correctamente.')
 
             return redirect('animal_detail', crotal=animal_actualizado.crotal)
 
@@ -264,31 +240,15 @@ def animal_edit(request, crotal):
 def animal_create(request):
     """Crear un nuevo animal."""
     form = AnimalForm(request.POST or None)
-    alerta_amarilla = None
     
     if request.method == 'POST' and form.is_valid():
-        alerta_amarilla = getattr(form, '_crotal_alerta', None)
-        
-        if alerta_amarilla == 'AMARILLO' and not request.POST.get('confirmar_crotal_historico'):
-            return render(request, 'ganaderia/animal_form.html', {
-                'form': form,
-                'alerta_amarilla': True,
-                'mensaje_alerta': getattr(form, '_crotal_mensaje', ''),
-            })
-        
-        animal = form.save()
-        
-        if alerta_amarilla == 'AMARILLO':
-            Incidencia.objects.create(
-                animal=animal,
-                tipo='AMARILLO',
-                descripcion=f'Se reutilizó el crotal {animal.crotal} previamente asignado a un animal en baja.'
-            )
-            messages.warning(request, f'⚠️ Animal {animal.crotal} creado con aviso: crotal histórico reutilizado.')
-        else:
+        with transaction.atomic():
+            animal = form.save()
             messages.success(request, f'✅ Animal {animal.crotal} registrado correctamente.')
         
         return redirect('animal_detail', crotal=animal.crotal)
+    
+    return render(request, 'ganaderia/animal_form.html', {'form': form, 'accion': 'Crear'})
     
     return render(request, 'ganaderia/animal_form.html', {'form': form, 'accion': 'Crear'})
 
@@ -558,7 +518,10 @@ def incidencias(request):
     tab = request.GET.get('tab', 'alertas')
     
     incidencias_activas = Incidencia.objects.filter(
-        resuelta=False
+        resuelta=False,
+        animal__estado_vital='VIVO'
+    ).exclude(
+        parto__madre__estado_vital='BAJA'
     ).select_related('animal', 'parto').order_by('-created_at')
     
     bajas = Animal.objects.filter(
@@ -735,8 +698,8 @@ def asistente_preview(request):
     errores_bloqueantes = []
     alerta_roja = False
     mensaje_rojo = None
-    alerta_amarilla = False
-    mensaje_amarillo = None
+    fecha_ajustada_hoy = False
+    fecha_solicitada_original = None
     madre = None
     fecha_parto = None
 
@@ -777,7 +740,9 @@ def asistente_preview(request):
         if fecha_parto:
             hoy = timezone.now().date()
             if fecha_parto > hoy:
-                errores_bloqueantes.append(f"La fecha de parto ({fecha_parto.strftime('%d/%m/%Y')}) no puede ser posterior a hoy ({hoy.strftime('%d/%m/%Y')}).")
+                fecha_solicitada_original = fecha_parto
+                fecha_parto = hoy
+                fecha_ajustada_hoy = True
 
             if madre:
                 if fecha_parto < madre.fecha_nacimiento:
@@ -799,9 +764,6 @@ def asistente_preview(request):
         val_crotal = validar_crotal(cria_crotal)
         if val_crotal['bloqueante']:
             errores_bloqueantes.append(val_crotal['mensaje'])
-        elif val_crotal.get('alerta') == 'AMARILLO':
-            alerta_amarilla = True
-            mensaje_amarillo = f"⚠️ Crotal #{cria_crotal} perteneció históricamente a un animal en baja."
 
     # 4. Validar intervalo reproductivo (RN-04: Mínimo 270 días)
     if madre and fecha_parto and not errores_bloqueantes:
@@ -820,6 +782,8 @@ def asistente_preview(request):
         'crotal_madre': crotal_madre,
         'fecha_parto': fecha_parto,
         'fecha_parto_str': fecha_parto.strftime('%Y-%m-%d') if fecha_parto else fecha_parto_str,
+        'fecha_ajustada_hoy': fecha_ajustada_hoy,
+        'fecha_solicitada_original': fecha_solicitada_original,
         'cria_crotal': cria_crotal,
         'cria_sexo': cria_sexo,
         'cria_raza': cria_raza,
@@ -827,8 +791,6 @@ def asistente_preview(request):
         'errores_bloqueantes': errores_bloqueantes,
         'alerta_roja': alerta_roja,
         'mensaje_rojo': mensaje_rojo,
-        'alerta_amarilla': alerta_amarilla,
-        'mensaje_amarillo': mensaje_amarillo,
         'puede_confirmar': len(errores_bloqueantes) == 0,
     })
 

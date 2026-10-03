@@ -62,6 +62,10 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
         fecha_parto = hoy - timedelta(days=2)
     elif "ayer" in texto_lower:
         fecha_parto = hoy - timedelta(days=1)
+    elif "pasado mañana" in texto_lower or "pasado manana" in texto_lower:
+        fecha_parto = hoy + timedelta(days=2)
+    elif "mañana" in texto_lower or "manana" in texto_lower:
+        fecha_parto = hoy + timedelta(days=1)
     elif "hoy" in texto_lower:
         fecha_parto = hoy
     else:

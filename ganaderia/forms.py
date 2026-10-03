@@ -145,8 +145,8 @@ class AnimalForm(forms.ModelForm):
         if resultado['bloqueante']:
             raise ValidationError(resultado['mensaje'])
         
-        self._crotal_alerta = resultado.get('alerta')
-        self._crotal_mensaje = resultado.get('mensaje')
+        self._crotal_alerta = None
+        self._crotal_mensaje = None
         return crotal
 
     def clean_fecha_nacimiento(self):

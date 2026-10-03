@@ -9,18 +9,8 @@
             <h2>➕ Registrar Nuevo Animal</h2>
         </div>
         <div class="card-body">
-            {% if alerta_amarilla %}
-            <div class="alert alert-warning">
-                <strong>⚠️ Alerta Amarilla (Crotal Histórico Reutilizado)</strong><br>
-                {{ mensaje_alerta }}
-            </div>
-            {% endif %}
-
             <form method="post">
                 {% csrf_token %}
-                {% if alerta_amarilla %}
-                <input type="hidden" name="confirmar_crotal_historico" value="1">
-                {% endif %}
 
                 <div class="form-group mb-2">
                     <label class="form-label" for="id_crotal">Crotal (4 dígitos) *</label>
@@ -63,7 +53,7 @@
 
                 <div class="d-flex gap-2">
                     <button type="submit" class="btn btn-primary w-100">
-                        {% if alerta_amarilla %}✅ Confirmar y Guardar{% else %}💾 Guardar Animal{% endif %}
+                        💾 Guardar Animal
                     </button>
                     <a href="{% url 'home' %}" class="btn btn-secondary w-100">Cancelar</a>
                 </div>

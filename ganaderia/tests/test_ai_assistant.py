@@ -130,8 +130,8 @@ class AIAssistantTestCase(TestCase):
         self.assertContains(res_no, "No existe ninguna madre con el crotal #8888")
         self.assertNotContains(res_no, "Confirmar y Guardar")
 
-    def test_preview_crotal_baja_muestra_alerta_amarilla(self):
-        """5. Test preview: crotal de cría perteneciente a un animal en baja activa advertencia amarilla."""
+    def test_preview_crotal_baja_permitido_sin_alerta_amarilla(self):
+        """5. Test preview: crotal de cría perteneciente a un animal en baja se permite limpiamente sin alerta amarilla."""
         Animal.objects.create(
             crotal="5012",
             sexo="H",
@@ -147,7 +147,62 @@ class AIAssistantTestCase(TestCase):
             'texto': 'La 3014 parió hoy ternera 5012 retinta'
         })
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "perteneció históricamente a un animal en baja")
+        self.assertNotContains(response, "Alerta Amarilla")
+        self.assertNotContains(response, "perteneció históricamente a un animal en baja")
+        self.assertTrue(response.context['puede_confirmar'])
+
+    def test_preview_ajusta_fecha_futura_a_hoy_con_banner_informativo(self):
+        """Test preview: enviar una fecha de mañana asigna hoy e incluye el mensaje informativo de ajuste."""
+        url_preview = reverse('asistente_preview')
+        response = self.client.post(url_preview, {
+            'texto': 'La 3014 parió mañana ternera 5012 retinta'
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context['fecha_ajustada_hoy'])
+        hoy = timezone.now().date()
+        self.assertEqual(response.context['fecha_parto'], hoy)
+        self.assertEqual(response.context['fecha_solicitada_original'], hoy + timedelta(days=1))
+        self.assertContains(response, "Fecha ajustada automáticamente")
+        self.assertContains(response, "Indicaste una fecha posterior")
+        self.assertTrue(response.context['puede_confirmar'])
+
+    def test_dar_de_baja_madre_limpia_incidencias_y_alertas_parto(self):
+        """Test baja madre: al dar de baja una hembra con parto en alerta roja, el parto limpia alerta_intervalo=False y desaparece de /incidencias/."""
+        from ganaderia.services.animal_services import dar_de_baja_animal
+
+        # Creamos parto con conflicto de intervalo (< 270d)
+        p1 = registrar_parto(
+            madre=self.madre,
+            fecha_parto=date(2023, 1, 1),
+            crias=[{'crotal': '8801', 'sexo': 'M'}]
+        )['parto']
+        p2 = registrar_parto(
+            madre=self.madre,
+            fecha_parto=date(2023, 5, 1),
+            forzar=True,
+            crias=[{'crotal': '8802', 'sexo': 'H'}]
+        )['parto']
+
+        self.assertTrue(p2.alerta_intervalo)
+        self.assertTrue(Incidencia.objects.filter(parto=p2, resuelta=False).exists())
+
+        url_incidencias = reverse('incidencias')
+        res_inc = self.client.get(url_incidencias)
+        self.assertContains(res_inc, f"Crotal {self.madre.crotal}")
+
+        # Dar de baja a la madre
+        dar_de_baja_animal(self.madre, motivo="Muerte natural")
+        self.madre.refresh_from_db()
+        p2.refresh_from_db()
+
+        # Verificar que alerta_intervalo es False
+        self.assertFalse(p2.alerta_intervalo)
+        # Verificar que la incidencia se marcó como resuelta
+        self.assertFalse(Incidencia.objects.filter(parto=p2, resuelta=False).exists())
+
+        # Verificar que /incidencias/ ya no muestra la alerta
+        res_inc_despues = self.client.get(url_incidencias)
+        self.assertNotContains(res_inc_despues, f"Crotal {self.madre.crotal}")
 
     def test_ejecucion_confirmada_crea_parto_y_cria_atomicamente(self):
         """6. Test de ejecución confirmada: POST a /asistente/ejecutar/ persiste parto y cría."""
