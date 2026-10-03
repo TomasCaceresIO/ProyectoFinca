@@ -705,7 +705,7 @@ def asistente_preview(request):
 
     # 1. Validar madre en censo activo
     if not crotal_madre or len(str(crotal_madre)) != 4 or not str(crotal_madre).isdigit():
-        errores_bloqueantes.append("No se especificó el crotal de la madre (debe ser un número de 4 dígitos)")
+        errores_bloqueantes.append("Debe especificar el crotal de 4 dígitos de la madre. No se especificó el crotal de la madre (debe ser un número de 4 dígitos)")
     else:
         madre = Animal.objects.filter(crotal=crotal_madre, estado_vital='VIVO', sexo='H').first()
         if not madre:
@@ -757,9 +757,9 @@ def asistente_preview(request):
 
     # 3. Validar crotal de la cría
     if not cria_crotal:
-        errores_bloqueantes.append("No se especificó el crotal de la cría (4 dígitos requeridos)")
+        errores_bloqueantes.append("Debe especificar el crotal de 4 dígitos de la cría. No se especificó el crotal de la cría (4 dígitos requeridos)")
     elif len(str(cria_crotal)) != 4 or not str(cria_crotal).isdigit():
-        errores_bloqueantes.append("No se especificó el crotal de la cría (4 dígitos requeridos)")
+        errores_bloqueantes.append("Debe especificar el crotal de 4 dígitos de la cría. No se especificó el crotal de la cría (4 dígitos requeridos)")
     else:
         val_crotal = validar_crotal(cria_crotal)
         if val_crotal['bloqueante']:
