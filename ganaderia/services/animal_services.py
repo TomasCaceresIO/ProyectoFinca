@@ -186,14 +186,29 @@ def registrar_parto(
         if val_crotal['bloqueante']:
             raise ValidationError(val_crotal['mensaje'])
 
+        finca_cria = c_data.get('finca') or madre.finca
+        sub_ubicacion_cria = c_data.get('sub_ubicacion') or c_data.get('recinto') or madre.sub_ubicacion
+
+        # Validar que el recinto esté habilitado en la finca
+        if hasattr(finca_cria, 'ubicaciones') and finca_cria.ubicaciones.exists():
+            recintos_habilitados = set(finca_cria.ubicaciones.values_list('tipo_ubicacion', flat=True))
+            if sub_ubicacion_cria not in recintos_habilitados:
+                raise ValidationError(
+                    f"El recinto '{sub_ubicacion_cria}' no está habilitado en la finca '{finca_cria.nombre}'. "
+                    f"Recintos disponibles: {', '.join(recintos_habilitados)}."
+                )
+
+        fecha_cebadero = fecha_parto if sub_ubicacion_cria == 'CEBADERO' else None
+
         cria = Animal.objects.create(
             crotal=crotal,
             sexo=c_data.get('sexo', 'M'),
             raza=c_data.get('raza', madre.raza),
             fecha_nacimiento=fecha_parto,
             estado_vital='VIVO',
-            finca=madre.finca,
-            sub_ubicacion=madre.sub_ubicacion,
+            finca=finca_cria,
+            sub_ubicacion=sub_ubicacion_cria,
+            fecha_entrada_cebadero=fecha_cebadero,
             madre=madre,
         )
         crias_creadas.append((cria, val_crotal))

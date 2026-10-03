@@ -326,19 +326,28 @@ def parto_create(request):
         forzar = form.cleaned_data.get('forzar_guardado', False)
         observaciones = form.cleaned_data.get('observaciones', '')
         
+        finca_cria_1 = form.cleaned_data.get('finca_cria_1') or madre.finca
+        recinto_cria_1 = form.cleaned_data.get('recinto_cria_1') or 'PASTO'
+
         crias = [
             {
                 'crotal': form.cleaned_data['crotal_cria_1'],
                 'sexo': form.cleaned_data['sexo_cria_1'],
                 'raza': form.cleaned_data.get('raza_cria_1') or madre.raza,
+                'finca': finca_cria_1,
+                'sub_ubicacion': recinto_cria_1,
             }
         ]
 
         if form.cleaned_data.get('es_gemelar'):
+            finca_cria_2 = form.cleaned_data.get('finca_cria_2') or madre.finca
+            recinto_cria_2 = form.cleaned_data.get('recinto_cria_2') or 'PASTO'
             crias.append({
                 'crotal': form.cleaned_data['crotal_cria_2'],
                 'sexo': form.cleaned_data['sexo_cria_2'],
                 'raza': form.cleaned_data.get('raza_cria_2') or madre.raza,
+                'finca': finca_cria_2,
+                'sub_ubicacion': recinto_cria_2,
             })
 
         validacion = validar_intervalo_parto(madre, fecha_parto)
@@ -675,8 +684,11 @@ def asistente_preview(request):
     texto_o_audio = audio if audio else texto
     audio_type = audio.content_type if audio and hasattr(audio, 'content_type') else 'audio/webm'
 
+    fincas_explotacion = Finca.objects.prefetch_related('ubicaciones').all()
+    nombres_fincas = [f.nombre for f in fincas_explotacion]
+
     try:
-        datos = procesar_comando_parto(texto_o_audio, audio_content_type=audio_type)
+        datos = procesar_comando_parto(texto_o_audio, audio_content_type=audio_type, fincas_disponibles=nombres_fincas)
     except Exception as e:
         return render(request, 'ganaderia/partials/ai_preview_modal.html', {
             'error_general': f"Error al procesar con el Asistente de IA: {str(e)}"
@@ -694,14 +706,17 @@ def asistente_preview(request):
     cria_sexo = datos.get('cria_sexo', 'H')
     cria_raza = datos.get('cria_raza', 'Retinta')
     cria_recinto = datos.get('cria_recinto', 'PASTO')
+    cria_finca_nombre = datos.get('cria_finca')
 
     errores_bloqueantes = []
+    advertencias = []
     alerta_roja = False
     mensaje_rojo = None
     fecha_ajustada_hoy = False
     fecha_solicitada_original = None
     madre = None
     fecha_parto = None
+    finca_destino = None
 
     # 1. Validar madre en censo activo
     if not crotal_madre or len(str(crotal_madre)) != 4 or not str(crotal_madre).isdigit():
@@ -719,6 +734,25 @@ def asistente_preview(request):
                     errores_bloqueantes.append(f"La vaca con crotal #{crotal_madre} no está disponible en el censo activo.")
             else:
                 errores_bloqueantes.append(f"No existe ninguna madre con el crotal #{crotal_madre} en la explotación.")
+
+    # Determinar finca destino de la cría
+    if cria_finca_nombre:
+        finca_destino = fincas_explotacion.filter(nombre__iexact=cria_finca_nombre).first()
+        if not finca_destino:
+            # Buscar coincidencia parcial
+            finca_destino = fincas_explotacion.filter(nombre__icontains=cria_finca_nombre).first()
+    if not finca_destino and madre:
+        finca_destino = madre.finca
+
+    # Validar recinto en la finca destino
+    if finca_destino:
+        recintos_finca = list(finca_destino.ubicaciones.values_list('tipo_ubicacion', flat=True))
+        if recintos_finca and cria_recinto not in recintos_finca:
+            advertencias.append(
+                f"El recinto '{cria_recinto}' no está habilitado en la finca '{finca_destino.nombre}'. "
+                f"Se ha conmutado automáticamente a 'PASTO'."
+            )
+            cria_recinto = 'PASTO'
 
     # 2. Validar fecha de parto
     if not fecha_parto_str:
@@ -791,7 +825,10 @@ def asistente_preview(request):
         'cria_sexo': cria_sexo,
         'cria_raza': cria_raza,
         'cria_recinto': cria_recinto,
+        'finca_destino': finca_destino,
+        'fincas_explotacion': fincas_explotacion,
         'errores_bloqueantes': errores_bloqueantes,
+        'advertencias': advertencias,
         'alerta_roja': alerta_roja,
         'mensaje_rojo': mensaje_rojo,
         'puede_confirmar': len(errores_bloqueantes) == 0,
@@ -812,12 +849,19 @@ def asistente_ejecutar(request):
     cria_sexo = request.POST.get('cria_sexo', 'H')
     cria_raza = request.POST.get('cria_raza', 'Retinta')
     cria_recinto = request.POST.get('cria_recinto', 'PASTO')
+    cria_finca_id = request.POST.get('cria_finca_id')
     forzar = request.POST.get('forzar') in ['1', 'true', 'True', True]
 
     madre = Animal.objects.filter(crotal=crotal_madre, estado_vital='VIVO', sexo='H').first()
     if not madre:
         messages.error(request, f"La madre #{crotal_madre} no se encuentra en el censo activo.")
         return redirect('home')
+
+    finca_obj = madre.finca
+    if cria_finca_id:
+        finca_custom = Finca.objects.filter(pk=cria_finca_id).first()
+        if finca_custom:
+            finca_obj = finca_custom
 
     try:
         if '-' in fecha_parto_str:
@@ -834,6 +878,8 @@ def asistente_ejecutar(request):
         'crotal': cria_crotal,
         'sexo': cria_sexo,
         'raza': cria_raza,
+        'finca': finca_obj,
+        'sub_ubicacion': cria_recinto,
     }]
 
     try:

@@ -46,6 +46,10 @@ class ComandoPartoOutput(BaseModel):
         default="PASTO",
         description="Recinto asignado a la cría: 'PASTO' o 'CEBADERO'."
     )
+    cria_finca: Optional[str] = Field(
+        default=None,
+        description="Nombre de la finca de la explotación donde se ubicará la cría (ej. 'Finca Montealto'). Null si no se indica."
+    )
 
 
 MESES_ESP = {
@@ -56,7 +60,7 @@ MESES_ESP = {
 }
 
 
-def _extraer_comando_parto_regex(texto: str) -> dict:
+def _extraer_comando_parto_regex(texto: str, fincas_disponibles: list = None) -> dict:
     """
     Parser simulado / fallback basado en reglas y expresiones regulares
     para extraer datos de registro de parto a partir de lenguaje natural.
@@ -150,9 +154,20 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
     # 4. Determinar recinto
     recinto = "CEBADERO" if "cebadero" in texto_lower else "PASTO"
 
-    # 5. Extraer crotales de forma estricta evitando números de año
-    # Identificar si un número de 4 dígitos forma parte de una fecha o año
-    # Detectamos años de 4 dígitos (19xx o 20xx) en contextos temporales como "de 2022", "en 2022", "/2022", "-2022"
+    # 5. Determinar finca si se menciona explícitamente
+    finca_detectada = None
+    if fincas_disponibles:
+        for f_nom in fincas_disponibles:
+            if f_nom.lower() in texto_lower:
+                finca_detectada = f_nom
+                break
+    if not finca_detectada:
+        # Detectar patrones como "en finca X", "en la finca X", "finca X"
+        m_finca = re.search(r'\b(?:en\s+la\s+finca|en\s+finca|finca)\s+([a-záéíóú0-9_\-]+(?:\s+[a-záéíóú0-9_\-]+)?)\b', texto_lower)
+        if m_finca:
+            finca_detectada = m_finca.group(1).title()
+
+    # 6. Extraer crotales de forma estricta evitando números de año
     anios_fecha = set()
     for m in re.finditer(r'(?:de|del|en|[/-]|\b)\s*(\d{4})\b', texto_lower):
         posible_anio = m.group(1)
@@ -215,10 +230,11 @@ def _extraer_comando_parto_regex(texto: str) -> dict:
         "cria_sexo": sexo,
         "cria_raza": raza,
         "cria_recinto": recinto,
+        "cria_finca": finca_detectada,
     }
 
 
-def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm') -> dict:
+def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm', fincas_disponibles: list = None) -> dict:
     """Llama a la API oficial de Google GenAI con structured outputs."""
     if genai is None or types is None:
         raise ImportError("El paquete google-genai no está disponible.")
@@ -229,10 +245,12 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm') -> dic
     hoy = timezone.now().date()
     hoy_iso = hoy.strftime('%Y-%m-%d')
     hoy_es = hoy.strftime('%d/%m/%Y')
+    fincas_str = ", ".join(fincas_disponibles) if fincas_disponibles else "no especificadas"
 
     system_instruction = (
         f"Eres el Asistente de Inteligencia Artificial de un sistema de gestión ganadera bovina. "
         f"La fecha de hoy de referencia es {hoy_iso} ({hoy_es}). "
+        f"Las fincas disponibles en la explotación son: [{fincas_str}]. "
         f"Tu cometido es extraer con exactitud los datos para registrar un parto de vaca y su cría. "
         f"Reglas estrictas de extracción:\n"
         f"- crotal_madre: Crotal obligatorio de exactamente 4 dígitos de la vaca madre (ej. '3014', '0001'). "
@@ -247,6 +265,7 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm') -> dic
         f"- cria_sexo: 'H' para hembra/ternera/becerra, 'M' para macho/ternero/becerro.\n"
         f"- cria_raza: raza de la cría (ej. 'Limusina', 'Retinta', 'Charolais'). Si no se menciona, usa la más probable o 'Retinta'.\n"
         f"- cria_recinto: 'PASTO' o 'CEBADERO' (por defecto 'PASTO').\n"
+        f"- cria_finca: nombre exacto de la finca mencionada para ubicar la cría si el usuario la nombra (ej. '{fincas_disponibles[0] if fincas_disponibles else 'Finca Principal'}'). Si no menciona finca, devolver null.\n"
         f"- intencion: 'REGISTRAR_PARTO' si describe un parto o nacimiento."
     )
 
@@ -274,7 +293,7 @@ def _llamar_gemini(texto_o_audio, audio_content_type: str = 'audio/webm') -> dic
     return json.loads(response.text)
 
 
-def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm') -> dict:
+def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm', fincas_disponibles: list = None) -> dict:
     """
     Punto de entrada principal para el procesamiento de comandos de parto (texto o audio).
     Utiliza Gemini 2.5 Flash si GEMINI_API_KEY está presente, o conmuta a modo simulado/fallback con regex.
@@ -283,16 +302,16 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
     
     if api_key.strip():
         try:
-            return _llamar_gemini(texto_o_audio, audio_content_type)
+            return _llamar_gemini(texto_o_audio, audio_content_type, fincas_disponibles=fincas_disponibles)
         except Exception as e:
             logger.warning(f"Error al invocar Gemini API ({e}). Usando fallback regex.")
             if isinstance(texto_o_audio, str):
-                return _extraer_comando_parto_regex(texto_o_audio)
+                return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
             raise e
 
     # Modo Simulado / Fallback sin API key
     if isinstance(texto_o_audio, str):
-        return _extraer_comando_parto_regex(texto_o_audio)
+        return _extraer_comando_parto_regex(texto_o_audio, fincas_disponibles=fincas_disponibles)
     
     # Audio recibido sin API key configurada
     return {
@@ -303,5 +322,6 @@ def procesar_comando_parto(texto_o_audio, audio_content_type: str = 'audio/webm'
         "cria_sexo": "H",
         "cria_raza": "Retinta",
         "cria_recinto": "PASTO",
+        "cria_finca": None,
         "error": "El análisis de audio directo requiere configurar la variable GEMINI_API_KEY."
     }

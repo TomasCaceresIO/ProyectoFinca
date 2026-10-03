@@ -245,6 +245,7 @@ class PartoForm(forms.ModelForm):
     Formulario para registrar un parto.
     Exige obligatoriamente la Cría 1 (Mínimo 1 cría).
     Si se marca 'es_gemelar', exige la Cría 2 (Máximo 2 crías).
+    Permite seleccionar explícitamente la Finca y el Recinto destino de cada cría.
     """
     crotal_cria_1 = forms.CharField(
         max_length=4,
@@ -267,6 +268,20 @@ class PartoForm(forms.ModelForm):
         initial='CRUZADO',
         label='Raza Cría 1',
         widget=forms.TextInput(attrs={'class': 'form-control'}),
+    )
+    finca_cria_1 = forms.ModelChoiceField(
+        queryset=Finca.objects.all(),
+        required=False,
+        label='Finca Cría 1',
+        widget=forms.Select(attrs={'class': 'form-control'}),
+        help_text='Por defecto se asigna la finca actual de la madre'
+    )
+    recinto_cria_1 = forms.ChoiceField(
+        choices=[('PASTO', 'Pasto'), ('CEBADERO', 'Cebadero'), ('APARTADO', 'Apartado')],
+        required=False,
+        initial='PASTO',
+        label='Recinto Cría 1',
+        widget=forms.Select(attrs={'class': 'form-control'}),
     )
 
     es_gemelar = forms.BooleanField(
@@ -296,6 +311,19 @@ class PartoForm(forms.ModelForm):
         label='Raza Cría 2',
         widget=forms.TextInput(attrs={'class': 'form-control'}),
     )
+    finca_cria_2 = forms.ModelChoiceField(
+        queryset=Finca.objects.all(),
+        required=False,
+        label='Finca Cría 2',
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
+    recinto_cria_2 = forms.ChoiceField(
+        choices=[('PASTO', 'Pasto'), ('CEBADERO', 'Cebadero'), ('APARTADO', 'Apartado')],
+        required=False,
+        initial='PASTO',
+        label='Recinto Cría 2',
+        widget=forms.Select(attrs={'class': 'form-control'}),
+    )
 
     forzar_guardado = forms.BooleanField(
         required=False,
@@ -321,6 +349,8 @@ class PartoForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         self.fields['madre'].queryset = Animal.objects.filter(sexo='H', estado_vital='VIVO')
         self.fields['fecha_parto'].widget.attrs['max'] = timezone.now().date().strftime('%Y-%m-%d')
+        self.fields['finca_cria_1'].queryset = Finca.objects.all()
+        self.fields['finca_cria_2'].queryset = Finca.objects.all()
 
     def clean_fecha_parto(self):
         fecha = self.cleaned_data.get('fecha_parto')
@@ -352,6 +382,17 @@ class PartoForm(forms.ModelForm):
         if not crotal1:
             self.add_error('crotal_cria_1', 'El crotal de la Cría 1 es obligatorio.')
 
+        # Validar recintos habilitados en las fincas seleccionadas
+        finca1 = cleaned_data.get('finca_cria_1') or (madre.finca if madre else None)
+        recinto1 = cleaned_data.get('recinto_cria_1') or 'PASTO'
+        if finca1 and hasattr(finca1, 'ubicaciones') and finca1.ubicaciones.exists():
+            recintos1 = set(finca1.ubicaciones.values_list('tipo_ubicacion', flat=True))
+            if recinto1 not in recintos1:
+                self.add_error(
+                    'recinto_cria_1',
+                    f"El recinto '{recinto1}' no está habilitado en la finca '{finca1.nombre}'. Recintos disponibles: {', '.join(recintos1)}."
+                )
+
         if es_gemelar:
             if not crotal2:
                 self.add_error('crotal_cria_2', 'El crotal de la 2ª cría es obligatorio para partos gemelares.')
@@ -359,6 +400,16 @@ class PartoForm(forms.ModelForm):
                 self.add_error('sexo_cria_2', 'El sexo de la 2ª cría es obligatorio para partos gemelares.')
             if crotal1 and crotal2 and crotal1 == crotal2:
                 self.add_error('crotal_cria_2', 'Los crotales de las dos crías no pueden ser idénticos.')
+
+            finca2 = cleaned_data.get('finca_cria_2') or (madre.finca if madre else None)
+            recinto2 = cleaned_data.get('recinto_cria_2') or 'PASTO'
+            if finca2 and hasattr(finca2, 'ubicaciones') and finca2.ubicaciones.exists():
+                recintos2 = set(finca2.ubicaciones.values_list('tipo_ubicacion', flat=True))
+                if recinto2 not in recintos2:
+                    self.add_error(
+                        'recinto_cria_2',
+                        f"El recinto '{recinto2}' no está habilitado en la finca '{finca2.nombre}'. Recintos disponibles: {', '.join(recintos2)}."
+                    )
 
         return cleaned_data
 
