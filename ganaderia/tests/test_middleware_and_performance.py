@@ -35,7 +35,7 @@ class MiddlewareAndPerformanceTestCase(TestCase):
                 sub_ubicacion="PASTO"
             )
 
-        # La consulta debe ejecutar exactamente 9 queries constantes sin sufrir N+1
-        with self.assertNumQueries(9):
+        # La consulta debe ejecutar un número constante de queries (10 con el context processor del contador global) sin sufrir N+1
+        with self.assertNumQueries(10):
             res = self.client.get(reverse('home'))
             self.assertEqual(res.status_code, 200)

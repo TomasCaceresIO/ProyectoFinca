@@ -7,12 +7,14 @@ from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from datetime import date
 
 from django.shortcuts import render, redirect, get_object_or_404
+from django.urls import reverse
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponse, StreamingHttpResponse, Http404
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
+from django.views.decorators.http import require_POST
 
 from .models import Explotacion, Finca, Ubicacion, Animal, Parto, Incidencia
 from .forms import (
@@ -126,7 +128,7 @@ def home(request):
         'total_animales': animales_vivos.count(),
         'hembras': animales_vivos.filter(sexo='H').count(),
         'machos': animales_vivos.filter(sexo='M').count(),
-        'incidencias': Incidencia.objects.filter(resuelta=False).count(),
+        'incidencias': Parto.objects.filter(alerta_intervalo=True, madre__estado_vital='VIVO').count(),
     }
     
     finca_id = request.GET.get('finca')
@@ -141,7 +143,12 @@ def home(request):
     page_obj = paginator.get_page(page_number)
     
     fincas = Finca.objects.all()
-    incidencias_recientes = Incidencia.objects.filter(resuelta=False).select_related('animal')[:5]
+    incidencias_recientes = Incidencia.objects.filter(
+        resuelta=False,
+        animal__estado_vital='VIVO',
+        parto__alerta_intervalo=True,
+        parto__madre__estado_vital='VIVO'
+    ).select_related('animal', 'parto')[:5]
     
     context = {
         'explotacion': explotacion,
@@ -560,8 +567,12 @@ def incidencias(request):
     q_baja = request.GET.get('q_baja', '').strip()
     tab = request.GET.get('tab', 'alertas')
     
+    # Filtrar exclusivamente sobre hembras vivas con partos en alerta de intervalo activa
     incidencias_activas = Incidencia.objects.filter(
-        resuelta=False
+        resuelta=False,
+        animal__estado_vital='VIVO',
+        parto__alerta_intervalo=True,
+        parto__madre__estado_vital='VIVO'
     ).select_related('animal', 'parto').order_by('-created_at')
     
     bajas = Animal.objects.filter(
@@ -572,12 +583,153 @@ def incidencias(request):
         bajas = bajas.filter(crotal__icontains=q_baja)
         tab = 'bajas'
         
+    incidencias_count = Parto.objects.filter(
+        alerta_intervalo=True,
+        madre__estado_vital='VIVO'
+    ).count()
+
     return render(request, 'ganaderia/incidencias.html', {
         'incidencias_activas': incidencias_activas,
+        'incidencias_count': incidencias_count,
         'bajas': bajas,
         'q_baja': q_baja,
         'tab': tab,
     })
+
+
+def incidencia_rectificar(request, pk):
+    """
+    Rectifica la fecha de un parto en conflicto.
+    Acepta el ID de una Incidencia o el ID de un Parto.
+    Si el intervalo recalculado con los partos adyacentes es >= 270 días:
+      - Asigna alerta_intervalo = False y guarda.
+      - Marca resuelta la Incidencia vinculada.
+    Retorna respuesta compatible con HTMX actualizando el badge #incidencias-counter.
+    """
+    from django.core.exceptions import ValidationError
+
+    incidencia = Incidencia.objects.filter(pk=pk).first()
+    if incidencia and incidencia.parto:
+        parto = incidencia.parto
+    else:
+        parto = get_object_or_404(Parto.objects.select_related('madre'), pk=pk)
+        incidencia = Incidencia.objects.filter(parto=parto).first()
+
+    if request.method == 'POST':
+        nueva_fecha_str = request.POST.get('nueva_fecha_parto') or request.POST.get('fecha_parto')
+        if not nueva_fecha_str:
+            messages.error(request, 'Debe indicar una fecha de parto válida.')
+            return redirect('incidencias')
+
+        try:
+            nueva_fecha = date.fromisoformat(str(nueva_fecha_str).strip())
+        except ValueError:
+            messages.error(request, f'Formato de fecha inválido: {nueva_fecha_str}')
+            return redirect('incidencias')
+
+        observaciones = request.POST.get('observaciones') or parto.observaciones
+
+        try:
+            actualizar_parto(parto, nueva_fecha, observaciones)
+        except ValidationError as e:
+            msg = e.message if hasattr(e, 'message') else str(e)
+            messages.error(request, f'Error biológico: {msg}')
+            return redirect('incidencias')
+
+        parto.refresh_from_db()
+        val = validar_intervalo_parto(parto.madre, parto.fecha_parto, excluir_parto_id=parto.pk)
+        if val['alerta'] != 'ROJO':
+            parto.alerta_intervalo = False
+            parto.save(update_fields=['alerta_intervalo'])
+            Incidencia.objects.filter(parto=parto).update(resuelta=True)
+            messages.success(request, f'✅ Fecha rectificada ({nueva_fecha.strftime("%d/%m/%Y")}). Intervalo válido (≥ 270d), alerta resuelta.')
+        else:
+            messages.warning(request, f'⚠️ Fecha actualizada ({nueva_fecha.strftime("%d/%m/%Y")}), pero el intervalo continúa en conflicto: {val["dias_intervalo"]} días.')
+
+        incidencias_count = Parto.objects.filter(
+            alerta_intervalo=True,
+            madre__estado_vital='VIVO'
+        ).count()
+
+        if request.headers.get('HX-Request'):
+            badge_display = "none" if incidencias_count == 0 else "inline-block"
+            counter_html = (
+                f'<span id="incidencias-counter" hx-swap-oob="true" class="badge badge-danger" '
+                f'style="font-size: 0.75rem; padding: 0.15rem 0.45rem; border-radius: 9999px; display: {badge_display};">'
+                f'{incidencias_count}</span>'
+            )
+            if not parto.alerta_intervalo:
+                return HttpResponse(f'<tr id="incidencia-row-{pk}" style="display: none;"></tr>\n{counter_html}')
+            else:
+                inc_obj = Incidencia.objects.filter(parto=parto).first()
+                desc = inc_obj.descripcion if inc_obj else f"Intervalo: {val['dias_intervalo']} días"
+                row_html = (
+                    f'<tr id="incidencia-row-{pk}">'
+                    f'<td><a href="/animales/{parto.madre.crotal}/"><strong>Crotal {parto.madre.crotal}</strong></a></td>'
+                    f'<td><span class="badge badge-danger">Alerta Roja (&lt; 270d)</span></td>'
+                    f'<td>{desc}</td>'
+                    f'<td><small>{timezone.now().strftime("%d/%m/%Y %H:%M")}</small></td>'
+                    f'<td><div class="d-flex gap-1">'
+                    f'<button type="button" class="btn btn-sm btn-primary" onclick="abrirModalRectificar(\'{pk}\', \'{parto.pk}\', \'{parto.madre.crotal}\', \'{parto.fecha_parto.strftime("%Y-%m-%d")}\')">✏️ Modificar Fecha</button>'
+                    f'<a href="/animales/{parto.madre.crotal}/" class="btn btn-sm btn-outline">👁️ Ver Ficha Madre</a>'
+                    f'</div></td></tr>'
+                )
+                return HttpResponse(f'{row_html}\n{counter_html}')
+
+        return redirect('incidencias')
+
+    return render(request, 'ganaderia/parto_edit.html', {
+        'parto': parto,
+        'form': PartoEditForm(instance=parto)
+    })
+
+
+@require_POST
+def incidencias_bajas_purgar(request):
+    """
+    Elimina permanentemente del sistema todos los registros de animales en estado BAJA en una transacción atómica.
+    No afecta a animales activos ni a crías vivas.
+    """
+    with transaction.atomic():
+        total_bajas = Animal.objects.filter(estado_vital='BAJA').count()
+        Animal.objects.filter(estado_vital='BAJA').delete()
+        Incidencia.objects.filter(animal__isnull=True).delete()
+
+    messages.success(request, f'✅ Historial de bajas vaciado exitosamente ({total_bajas} registros eliminados permanentemente).')
+
+    if request.headers.get('HX-Request'):
+        return HttpResponse(status=200, headers={'HX-Refresh': 'true'})
+
+    return redirect(reverse('incidencias') + '?tab=bajas')
+
+
+@require_POST
+def incidencias_alertas_limpiar(request):
+    """
+    Acción administrativa para depurar alertas huérfanas o desactualizadas:
+    - Resetea alerta_intervalo=False en partos cuyas madres ya no formen parte del censo activo (BAJA).
+    - Marca como resueltas las incidencias de animales en estado BAJA.
+    - Evalúa los partos activos con alerta_intervalo=True; si su intervalo adyacente recalculado es >= 270 días, desactiva la alerta y resuelve la incidencia.
+    """
+    with transaction.atomic():
+        Parto.objects.filter(madre__estado_vital='BAJA', alerta_intervalo=True).update(alerta_intervalo=False)
+        Incidencia.objects.filter(animal__estado_vital='BAJA').update(resuelta=True)
+        Incidencia.objects.filter(parto__madre__estado_vital='BAJA').update(resuelta=True)
+
+        partos_alerta = Parto.objects.filter(alerta_intervalo=True, madre__estado_vital='VIVO').select_related('madre')
+        for p in partos_alerta:
+            val = validar_intervalo_parto(p.madre, p.fecha_parto, excluir_parto_id=p.pk)
+            if val['alerta'] != 'ROJO':
+                p.alerta_intervalo = False
+                p.save(update_fields=['alerta_intervalo'])
+                Incidencia.objects.filter(parto=p).update(resuelta=True)
+
+    messages.success(request, '✅ Depuración de alertas completada. El censo normativo se encuentra actualizado.')
+
+    if request.headers.get('HX-Request'):
+        return HttpResponse(status=200, headers={'HX-Refresh': 'true'})
+
+    return redirect('incidencias')
 
 
 class Echo:

@@ -30,6 +30,9 @@ urlpatterns = [
     
     # Incidencias / Bajas
     path('incidencias/', views.incidencias, name='incidencias'),
+    path('incidencias/<int:pk>/rectificar/', views.incidencia_rectificar, name='incidencia_rectificar'),
+    path('incidencias/bajas/purgar/', views.incidencias_bajas_purgar, name='incidencias_bajas_purgar'),
+    path('incidencias/alertas/limpiar/', views.incidencias_alertas_limpiar, name='incidencias_alertas_limpiar'),
     
     # Exportaciones (CSV / Excel)
     path('exportar/csv/', views.exportar_csv, name='exportar_csv'),
