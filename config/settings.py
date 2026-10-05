@@ -88,6 +88,10 @@ DATABASES = {
     'default': env.db('DATABASE_URL', default='sqlite:///db.sqlite3')
 }
 
+if 'sslmode' not in DATABASES['default'].get('OPTIONS', {}):
+    if 'supabase.com' in DATABASES['default'].get('HOST', ''):
+        DATABASES['default'].setdefault('OPTIONS', {})['sslmode'] = 'require'
+
 # --- VALIDACIONES DE CONTRASEÑA ---
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
