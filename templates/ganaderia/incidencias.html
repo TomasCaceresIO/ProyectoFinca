@@ -13,7 +13,7 @@
 <!-- Tabs selector -->
 <div class="d-flex gap-2 mb-3 border-bottom pb-2">
     <a href="?tab=alertas" class="btn {% if tab != 'bajas' %}btn-primary{% else %}btn-outline{% endif %}">
-        🚨 Alertas Normativas (Intervalo &lt; 270d)
+        🚨 Alertas Normativas ({{ incidencias_count }})
     </a>
     <a href="?tab=bajas" class="btn {% if tab == 'bajas' %}btn-primary{% else %}btn-outline{% endif %}">
         📜 Histórico de Bajas y Salidas ({{ bajas.count }})
@@ -23,8 +23,14 @@
 {% if tab != 'bajas' %}
 <!-- TAB 1: ALERTAS NORMATIVAS -->
 <div class="card mb-4">
-    <div class="card-header">
-        <h3>🚨 Alertas Activas de Partos e Intervalos</h3>
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <h3 style="margin: 0;">🚨 Alertas Activas de Partos e Intervalos</h3>
+        <form method="post" action="{% url 'incidencias_alertas_limpiar' %}" style="margin: 0;" onsubmit="const btn = this.querySelector('button'); if(btn){ btn.disabled = true; btn.innerText = '🧹 Limpiando...'; }">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-sm btn-outline" title="Resetear alertas huérfanas de animales dados de baja o rectificados">
+                🧹 Limpiar Alertas de Animales No Activos
+            </button>
+        </form>
     </div>
     <div class="card-body">
         <div class="table-responsive">
@@ -38,7 +44,7 @@
                         <th>Acciones</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="incidencias-tbody">
                     {% for inc in incidencias_activas %}
                     <tr id="incidencia-row-{{ inc.id }}">
                         <td>
@@ -58,7 +64,9 @@
                         <td>
                             <div class="d-flex gap-1">
                                 {% if inc.parto %}
-                                <a href="{% url 'parto_edit' pk=inc.parto.pk %}" class="btn btn-sm btn-primary">✏️ Modificar Fecha</a>
+                                <button type="button" class="btn btn-sm btn-primary" onclick="abrirModalRectificar('{{ inc.id }}', '{{ inc.parto.id }}', '{{ inc.animal.crotal }}', '{{ inc.parto.fecha_parto|date:"Y-m-d" }}')">
+                                    ✏️ Rectificar Fecha
+                                </button>
                                 {% endif %}
                                 <a href="{% url 'animal_detail' crotal=inc.animal.crotal %}" class="btn btn-sm btn-outline">👁️ Ver Ficha Madre</a>
                             </div>
@@ -80,8 +88,15 @@
 {% else %}
 <!-- TAB 2: HISTÓRICO DE BAJAS Y SALIDAS -->
 <div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h3>📜 Histórico de Animales Dados de Baja</h3>
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <div class="d-flex align-items-center gap-2">
+            <h3 style="margin: 0;">📜 Histórico de Animales Dados de Baja</h3>
+            {% if bajas.exists %}
+            <button type="button" class="btn btn-sm btn-danger" onclick="abrirModalPurgarBajas()" style="display: inline-flex; align-items: center; gap: 0.35rem;">
+                🗑️ Vaciar Historial de Bajas
+            </button>
+            {% endif %}
+        </div>
         <form method="get" class="d-flex gap-1">
             <input type="hidden" name="tab" value="bajas">
             <input type="text" name="q_baja" class="form-control form-control-sm" 
@@ -142,4 +157,84 @@
     </div>
 </div>
 {% endif %}
+
+<!-- MODAL RECTIFICAR FECHA DE PARTO -->
+<div id="modal-rectificar-parto" class="modal-overlay" style="display: none;">
+    <div class="modal" style="max-width: 500px;">
+        <div class="modal-header d-flex justify-between align-center">
+            <h3 style="margin: 0; font-size: 1.15rem;">✏️ Rectificar Fecha de Parto</h3>
+            <button type="button" class="btn btn-sm btn-outline" onclick="cerrarModalRectificar()">✕</button>
+        </div>
+        <form id="form-rectificar-parto" method="post" action="">
+            {% csrf_token %}
+            <div class="modal-body" style="padding: 1.25rem;">
+                <p id="modal-rectificar-info" class="text-muted mb-3" style="font-size: 0.9rem;"></p>
+                <div class="form-group mb-3">
+                    <label class="form-label" style="font-weight: 600;">Nueva Fecha de Parto *</label>
+                    <input type="date" name="nueva_fecha_parto" id="input-nueva-fecha" class="form-control" max="{{ hoy|date:'Y-m-d' }}" required>
+                    <small class="text-muted">El sistema recalculará los días entre este parto y los adyacentes.</small>
+                </div>
+            </div>
+            <div class="modal-footer d-flex justify-between" style="padding: 1rem 1.25rem; background-color: #f8fafc; border-top: 1px solid var(--color-border);">
+                <button type="button" class="btn btn-secondary" onclick="cerrarModalRectificar()">Cancelar</button>
+                <button type="submit" class="btn btn-primary">💾 Guardar y Recalcular</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- MODAL CONFIRMACIÓN PURGADO TOTAL DE BAJAS -->
+<div id="modal-purgar-bajas" class="modal-overlay" style="display: none;">
+    <div class="modal" style="max-width: 550px;">
+        <div class="modal-header d-flex justify-between align-center" style="background-color: #fee2e2; border-bottom: 1px solid #fecaca;">
+            <h3 style="margin: 0; color: #991b1b; display: flex; align-items: center; gap: 0.5rem; font-size: 1.15rem;">
+                ⚠️ Vaciar Historial de Bajas
+            </h3>
+            <button type="button" class="btn btn-sm btn-outline" onclick="cerrarModalPurgarBajas()">✕</button>
+        </div>
+        <form method="post" action="{% url 'incidencias_bajas_purgar' %}">
+            {% csrf_token %}
+            <div class="modal-body" style="padding: 1.5rem;">
+                <div class="alert alert-danger" style="background-color: #fef2f2; border: 1px solid #f87171; color: #991b1b; padding: 1rem; border-radius: 6px; font-size: 0.95rem; line-height: 1.5;">
+                    <strong>⚠️ ADVERTENCIA CRÍTICA:</strong> Se van a eliminar permanentemente del sistema todos los registros de animales en estado <strong>BAJA</strong> ({{ bajas.count }} registros). Esta acción no se puede deshacer. Los animales activos y las crías vivas no se verán afectados.
+                </div>
+                <p class="text-muted" style="font-size: 0.875rem; margin-top: 1rem; margin-bottom: 0;">
+                    Por favor, confirma que deseas purgar de forma irreversible estos registros históricos.
+                </p>
+            </div>
+            <div class="modal-footer d-flex justify-between" style="padding: 1rem 1.5rem; background-color: #f8fafc; border-top: 1px solid var(--color-border);">
+                <button type="button" class="btn btn-secondary" onclick="cerrarModalPurgarBajas()">Cancelar</button>
+                <button type="submit" class="btn btn-danger font-weight-bold">
+                    🗑️ Confirmar Purgado Total de Bajas
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function abrirModalRectificar(incId, partoId, crotal, fechaActual) {
+    const modal = document.getElementById('modal-rectificar-parto');
+    const form = document.getElementById('form-rectificar-parto');
+    const info = document.getElementById('modal-rectificar-info');
+    const inputFecha = document.getElementById('input-nueva-fecha');
+    
+    form.action = '/incidencias/' + incId + '/rectificar/';
+    info.textContent = 'Rectificando parto de la madre crotal #' + crotal + ' (fecha actual: ' + fechaActual + ').';
+    inputFecha.value = fechaActual;
+    modal.style.display = 'flex';
+}
+
+function cerrarModalRectificar() {
+    document.getElementById('modal-rectificar-parto').style.display = 'none';
+}
+
+function abrirModalPurgarBajas() {
+    document.getElementById('modal-purgar-bajas').style.display = 'flex';
+}
+
+function cerrarModalPurgarBajas() {
+    document.getElementById('modal-purgar-bajas').style.display = 'none';
+}
+</script>
 {% endblock %}
