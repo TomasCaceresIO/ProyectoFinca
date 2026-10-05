@@ -32,6 +32,9 @@ EOF
 echo "==> Aplicando migraciones..."
 python manage.py migrate --noinput
 
+echo "==> Inicializando datos y credenciales..."
+python init_admin.py
+
 echo "==> Recolectando archivos estáticos..."
 python manage.py collectstatic --noinput
 
