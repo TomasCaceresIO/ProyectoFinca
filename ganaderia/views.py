@@ -8,7 +8,8 @@ from datetime import date
 
 from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib import messages
-from django.http import JsonResponse, HttpResponse, Http404
+from django.http import JsonResponse, HttpResponse, StreamingHttpResponse, Http404
+from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Max
 from django.utils import timezone
@@ -135,13 +136,19 @@ def home(request):
     orden = request.GET.get('orden', 'crotal')
     
     lista_animales = get_filtered_animales(request)
+    paginator = Paginator(lista_animales, 25)
+    page_number = request.GET.get('page', 1)
+    page_obj = paginator.get_page(page_number)
+    
     fincas = Finca.objects.all()
     incidencias_recientes = Incidencia.objects.filter(resuelta=False).select_related('animal')[:5]
     
     context = {
         'explotacion': explotacion,
         'stats': stats,
-        'animales': lista_animales,
+        'animales': page_obj.object_list,
+        'page_obj': page_obj,
+        'paginator': paginator,
         'fincas': fincas,
         'incidencias_recientes': incidencias_recientes,
         'filtros': {
@@ -573,51 +580,59 @@ def incidencias(request):
     })
 
 
+class Echo:
+    """Objeto pseudo-buffer que implementa write para devolver el valor en StreamingHttpResponse."""
+    def write(self, value):
+        return value
+
+
 def exportar_csv(request):
-    """Exportación de censo filtrado a archivo CSV Oficial (optimizado para evitar N+1 queries)."""
+    """Exportación de censo filtrado a archivo CSV Oficial en streaming bajo demanda (cero consumo acumulativo de RAM)."""
     animales = get_filtered_animales(request, with_annotations=True)
     today = date.today()
-    
-    response = HttpResponse(content_type='text/csv; charset=utf-8')
-    response['Content-Disposition'] = f'attachment; filename="censo_ganadero_{today.strftime("%Y%m%d")}.csv"'
-    
-    response.write('\ufeff')
-    writer = csv.writer(response, delimiter=';')
     
     headers = [
         'Crotal', 'Sexo', 'Raza', 'Fecha Nacimiento', 'Edad (días)',
         'Finca Actual', 'Recinto Actual', 'Días en Cebadero',
         'Crotal Madre', 'Nº de Partos', 'Días desde Último Parto'
     ]
-    writer.writerow(headers)
-    
-    for a in animales:
-        dias_cebadero = (today - a.fecha_entrada_cebadero).days if a.fecha_entrada_cebadero else '-'
-        crotal_madre = a.madre.crotal if a.madre else '-'
-        n_partos = getattr(a, 'total_partos', 0) if a.sexo == 'H' else 0
-        
-        last_date = getattr(a, 'ultimo_parto_fecha', None)
-        if a.sexo == 'H' and last_date:
-            dias_ultimo_parto = (today - last_date).days
-        else:
-            dias_ultimo_parto = '-'
+
+    def generador_csv():
+        # Enviar BOM UTF-8 para apertura correcta en Excel
+        yield '\ufeff'
+        pseudo_buffer = Echo()
+        writer = csv.writer(pseudo_buffer, delimiter=';')
+        yield writer.writerow(headers)
+
+        for a in animales:
+            dias_cebadero = (today - a.fecha_entrada_cebadero).days if a.fecha_entrada_cebadero else '-'
+            crotal_madre = a.madre.crotal if a.madre else '-'
+            n_partos = getattr(a, 'total_partos', 0) if a.sexo == 'H' else 0
             
-        finca_nombre = a.finca.nombre if a.finca else '-'
-        
-        writer.writerow([
-            a.crotal,
-            a.get_sexo_display(),
-            a.raza,
-            a.fecha_nacimiento.strftime('%d/%m/%Y'),
-            a.edad_dias,
-            finca_nombre,
-            a.get_sub_ubicacion_display(),
-            dias_cebadero,
-            crotal_madre,
-            n_partos,
-            dias_ultimo_parto,
-        ])
-        
+            last_date = getattr(a, 'ultimo_parto_fecha', None)
+            if a.sexo == 'H' and last_date:
+                dias_ultimo_parto = (today - last_date).days
+            else:
+                dias_ultimo_parto = '-'
+                
+            finca_nombre = a.finca.nombre if a.finca else '-'
+            
+            yield writer.writerow([
+                a.crotal,
+                a.get_sexo_display(),
+                a.raza,
+                a.fecha_nacimiento.strftime('%d/%m/%Y'),
+                a.edad_dias,
+                finca_nombre,
+                a.get_sub_ubicacion_display(),
+                dias_cebadero,
+                crotal_madre,
+                n_partos,
+                dias_ultimo_parto,
+            ])
+
+    response = StreamingHttpResponse(generador_csv(), content_type='text/csv; charset=utf-8')
+    response['Content-Disposition'] = f'attachment; filename="censo_ganadero_{today.strftime("%Y%m%d")}.csv"'
     return response
 
 

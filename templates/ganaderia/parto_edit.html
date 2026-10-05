@@ -12,7 +12,7 @@
             <p><strong>Parto actual:</strong> {{ parto.fecha_parto|date:"d/m/Y" }}</p>
             <p class="text-muted"><small>Al modificar la fecha, el sistema verificará automáticamente el intervalo de 270 días con los partos anterior y posterior más cercanos.</small></p>
 
-            <form method="post">
+            <form method="post" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '💾 Guardando...'; }">
                 {% csrf_token %}
                 <div class="form-group mb-3">
                     <label class="form-label">Nueva Fecha de Parto *</label>

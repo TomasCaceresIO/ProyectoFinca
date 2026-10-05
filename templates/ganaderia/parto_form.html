@@ -23,7 +23,7 @@
             </div>
             {% endif %}
 
-            <form method="post">
+            <form method="post" onsubmit="const btn = this.querySelector('button[type=submit]'); if (btn) { btn.disabled = true; btn.innerText = '🐣 Guardando...'; }">
                 {% csrf_token %}
                 {% if alerta_intervalo %}
                 <input type="hidden" name="forzar_guardado" value="1">
@@ -44,7 +44,7 @@
                 <!-- Cría 1 (Obligatoria) -->
                 <div class="card mb-3 p-3 bg-light">
                     <h5>🐮 Datos de la Cría 1 (Obligatoria)</h5>
-                    <div class="grid-3 gap-2">
+                    <div class="grid-3 gap-2 mb-2">
                         <div>
                             <label class="form-label"><small>Crotal (4 dígitos) *</small></label>
                             {{ form.crotal_cria_1 }}
@@ -58,6 +58,18 @@
                         <div>
                             <label class="form-label"><small>Raza</small></label>
                             {{ form.raza_cria_1 }}
+                        </div>
+                    </div>
+                    <div class="grid-2 gap-2">
+                        <div>
+                            <label class="form-label"><small>Finca Destino (Opcional, hereda de la madre)</small></label>
+                            {{ form.finca_cria_1 }}
+                            {% if form.finca_cria_1.errors %}<div class="text-danger"><small>{{ form.finca_cria_1.errors.0 }}</small></div>{% endif %}
+                        </div>
+                        <div>
+                            <label class="form-label"><small>Recinto Asignado</small></label>
+                            {{ form.recinto_cria_1 }}
+                            {% if form.recinto_cria_1.errors %}<div class="text-danger"><small>{{ form.recinto_cria_1.errors.0 }}</small></div>{% endif %}
                         </div>
                     </div>
                 </div>
@@ -75,7 +87,7 @@
                 <!-- Cría 2 (Desplegable) -->
                 <div class="card mb-3 p-3 bg-light" id="container_cria_2" style="display: {% if form.es_gemelar.value %}block{% else %}none{% endif %};">
                     <h5>🐮 Datos de la Cría 2 (Gemelar)</h5>
-                    <div class="grid-3 gap-2">
+                    <div class="grid-3 gap-2 mb-2">
                         <div>
                             <label class="form-label"><small>Crotal (4 dígitos) *</small></label>
                             {{ form.crotal_cria_2 }}
@@ -89,6 +101,18 @@
                         <div>
                             <label class="form-label"><small>Raza</small></label>
                             {{ form.raza_cria_2 }}
+                        </div>
+                    </div>
+                    <div class="grid-2 gap-2">
+                        <div>
+                            <label class="form-label"><small>Finca Destino (Opcional, hereda de la madre)</small></label>
+                            {{ form.finca_cria_2 }}
+                            {% if form.finca_cria_2.errors %}<div class="text-danger"><small>{{ form.finca_cria_2.errors.0 }}</small></div>{% endif %}
+                        </div>
+                        <div>
+                            <label class="form-label"><small>Recinto Asignado</small></label>
+                            {{ form.recinto_cria_2 }}
+                            {% if form.recinto_cria_2.errors %}<div class="text-danger"><small>{{ form.recinto_cria_2.errors.0 }}</small></div>{% endif %}
                         </div>
                     </div>
                 </div>

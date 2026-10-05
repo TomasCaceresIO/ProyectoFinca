@@ -41,21 +41,6 @@ def validar_crotal(crotal: str, excluir_pk: int = None) -> dict:
             'animal_baja': None,
         }
     
-    qs_baja = Animal.objects.filter(crotal=crotal, estado_vital='BAJA')
-    animal_baja = qs_baja.last()
-    
-    if animal_baja:
-        return {
-            'valido': True,
-            'bloqueante': False,
-            'alerta': 'AMARILLO',
-            'mensaje': (
-                f'RN-03: El crotal {crotal} fue usado por un animal dado de baja '
-                f'el {animal_baja.fecha_baja}. ¿Desea asignar igualmente?'
-            ),
-            'animal_baja': animal_baja,
-        }
-    
     return {
         'valido': True,
         'bloqueante': False,
@@ -89,6 +74,24 @@ def validar_intervalo_parto(madre: Animal, fecha_nuevo_parto: date, excluir_part
     partos = Parto.objects.filter(madre=madre)
     if excluir_parto_id:
         partos = partos.exclude(pk=excluir_parto_id)
+
+    # Evaluar partos en la misma fecha (límite biológico: máximo 2 crías / gemelos)
+    partos_mismo_dia = partos.filter(fecha_parto=fecha_nuevo_parto)
+    # Si ya hay 2 o más partos en esa misma fecha exacta, un tercer parto es inadmisible y dispara Alerta Roja
+    if partos_mismo_dia.count() >= 2:
+        return {
+            'valido': False,
+            'alerta': 'ROJO',
+            'dias_intervalo': 0,
+            'dias_anterior': 0,
+            'dias_posterior': 0,
+            'parto_anterior': partos_mismo_dia.first(),
+            'parto_posterior': None,
+            'mensaje': (
+                f'RN-04: Límite de partos múltiples excedido. La madre ya cuenta con {partos_mismo_dia.count()} '
+                f'partos registrados en esta misma fecha ({fecha_nuevo_parto.strftime("%d/%m/%Y")}). Máximo admitido: 2 (parto gemelar).'
+            ),
+        }
 
     # Evaluar únicamente contra partos con fechas estrictamente distintas (anteriores o posteriores)
     parto_anterior = partos.filter(fecha_parto__lt=fecha_nuevo_parto).order_by('-fecha_parto').first()
@@ -183,14 +186,29 @@ def registrar_parto(
         if val_crotal['bloqueante']:
             raise ValidationError(val_crotal['mensaje'])
 
+        finca_cria = c_data.get('finca') or madre.finca
+        sub_ubicacion_cria = c_data.get('sub_ubicacion') or c_data.get('recinto') or madre.sub_ubicacion
+
+        # Validar que el recinto esté habilitado en la finca
+        if hasattr(finca_cria, 'ubicaciones') and finca_cria.ubicaciones.exists():
+            recintos_habilitados = set(finca_cria.ubicaciones.values_list('tipo_ubicacion', flat=True))
+            if sub_ubicacion_cria not in recintos_habilitados:
+                raise ValidationError(
+                    f"El recinto '{sub_ubicacion_cria}' no está habilitado en la finca '{finca_cria.nombre}'. "
+                    f"Recintos disponibles: {', '.join(recintos_habilitados)}."
+                )
+
+        fecha_cebadero = fecha_parto if sub_ubicacion_cria == 'CEBADERO' else None
+
         cria = Animal.objects.create(
             crotal=crotal,
             sexo=c_data.get('sexo', 'M'),
             raza=c_data.get('raza', madre.raza),
             fecha_nacimiento=fecha_parto,
             estado_vital='VIVO',
-            finca=madre.finca,
-            sub_ubicacion=madre.sub_ubicacion,
+            finca=finca_cria,
+            sub_ubicacion=sub_ubicacion_cria,
+            fecha_entrada_cebadero=fecha_cebadero,
             madre=madre,
         )
         crias_creadas.append((cria, val_crotal))
@@ -216,24 +234,17 @@ def registrar_parto(
 
     incidencia = None
     if alerta_intervalo:
+        desc = (
+            validacion_intervalo['mensaje']
+            if validacion_intervalo.get('dias_intervalo') == 0
+            else f'Intervalo entre partos de {validacion_intervalo["dias_intervalo"]} días (mínimo: {INTERVALO_MINIMO_PARTOS} días).'
+        )
         incidencia = Incidencia.objects.create(
             animal=madre,
             tipo='ROJO',
-            descripcion=(
-                f'Intervalo entre partos de {validacion_intervalo["dias_intervalo"]} días '
-                f'(mínimo: {INTERVALO_MINIMO_PARTOS} días).'
-            ),
+            descripcion=desc,
             parto=parto,
         )
-
-    for cria_obj, val_c in crias_creadas:
-        if val_c.get('alerta') == 'AMARILLO':
-            Incidencia.objects.create(
-                animal=cria_obj,
-                tipo='AMARILLO',
-                descripcion=f'Se reutilizó el crotal {cria_obj.crotal} previamente asignado a un animal en baja.',
-                parto=parto,
-            )
 
     return {
         'parto': parto,
@@ -309,10 +320,18 @@ def trasladar_animal(animal: Animal, nueva_finca: Finca, nueva_sub_ubicacion: st
 def dar_de_baja_animal(animal: Animal, motivo: str = '') -> Animal:
     """
     Da de baja un animal (estado_vital = 'BAJA').
-    Sus partos e hijos permanecen intactos.
+    Sus partos e hijos permanecen intactos en genealogía, pero se desactivan
+    sus alertas de intervalo y se resuelven las incidencias vinculadas.
     """
     animal.estado_vital = 'BAJA'
     animal.fecha_baja = timezone.now().date()
     animal.motivo_baja = motivo
     animal.save()
+
+    # Desactivar alertas de intervalo en partos como madre
+    animal.partos_como_madre.filter(alerta_intervalo=True).update(alerta_intervalo=False)
+    # Resolver incidencias vinculadas a esos partos o a la madre
+    Incidencia.objects.filter(parto__madre=animal).update(resuelta=True)
+    Incidencia.objects.filter(animal=animal, tipo='ROJO').update(resuelta=True)
+
     return animal

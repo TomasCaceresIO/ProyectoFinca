@@ -70,8 +70,8 @@ class CrotalAndConstraintsTestCase(TestCase):
                 sub_ubicacion="PASTO"
             )
 
-    def test_yellow_alert_on_reusing_baja_crotal(self):
-        """Verificar alerta amarilla si se reutiliza un crotal de un animal en BAJA."""
+    def test_reusing_baja_crotal_allowed_without_alert(self):
+        """Verificar que reutilizar un crotal de un animal en BAJA se permite directamente sin alertas."""
         a1 = Animal.objects.create(
             crotal="0099",
             sexo="H",
@@ -85,8 +85,7 @@ class CrotalAndConstraintsTestCase(TestCase):
         res = validar_crotal("0099")
         self.assertTrue(res['valido'])
         self.assertFalse(res['bloqueante'])
-        self.assertEqual(res['alerta'], 'AMARILLO')
-        self.assertIsNotNone(res['animal_baja'])
+        self.assertIsNone(res['alerta'])
 
     def test_duplicate_crotal_detail_view_prioritizes_vivo(self):
         """
