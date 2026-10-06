@@ -11,11 +11,22 @@ from django.urls import reverse
 from django.contrib import messages
 from django.http import JsonResponse, HttpResponse, StreamingHttpResponse, Http404
 from django.core.paginator import Paginator
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Count, Max
 from django.utils import timezone
+from django.contrib.auth.decorators import login_required
 from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
 from django.views.decorators.http import require_POST
+
+
+def healthcheck(request):
+    """Endpoint ligero para UptimeRobot que confirma el estado de la BD sin exigir login."""
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1;")
+        return HttpResponse("OK", status=200, content_type="text/plain")
+    except Exception as e:
+        return HttpResponse(f"UNHEALTHY: {str(e)}", status=503, content_type="text/plain")
 
 from .models import Explotacion, Finca, Ubicacion, Animal, Parto, Incidencia
 from .forms import (
@@ -75,6 +86,7 @@ def get_filtered_animales(request, with_annotations=False):
     return lista
 
 
+@login_required
 def setup_wizard(request):
     """Wizard de configuración inicial (Onboarding)."""
     if Explotacion.objects.exists():
@@ -103,6 +115,7 @@ def setup_wizard(request):
     return render(request, 'ganaderia/setup_wizard.html', {'form': form})
 
 
+@login_required
 def explotacion_edit(request):
     """Edición de los datos oficiales de la explotación (Nombre y Código REGA)."""
     explotacion = Explotacion.objects.first()
@@ -118,6 +131,7 @@ def explotacion_edit(request):
     return render(request, 'ganaderia/explotacion_form.html', {'form': form, 'explotacion': explotacion})
 
 
+@login_required
 @ensure_csrf_cookie
 def home(request):
     """Panel de control principal y Censo Activo (Home Data Grid)."""
@@ -176,11 +190,13 @@ def home(request):
     return render(request, 'ganaderia/home.html', context)
 
 
+@login_required
 def animal_list(request):
     """Redirige al Data Grid principal en Home."""
     return redirect('home')
 
 
+@login_required
 def animal_detail(request, crotal):
     """
     Ficha detallada de un animal.
@@ -215,6 +231,7 @@ def animal_detail(request, crotal):
     })
 
 
+@login_required
 def animal_edit(request, crotal):
     """
     Editar atributos básicos de un animal desde su ficha.
@@ -250,6 +267,7 @@ def animal_edit(request, crotal):
     return redirect('animal_detail', crotal=animal.crotal)
 
 
+@login_required
 def animal_create(request):
     """Crear un nuevo animal."""
     form = AnimalForm(request.POST or None)
@@ -262,10 +280,9 @@ def animal_create(request):
         return redirect('animal_detail', crotal=animal.crotal)
     
     return render(request, 'ganaderia/animal_form.html', {'form': form, 'accion': 'Crear'})
-    
-    return render(request, 'ganaderia/animal_form.html', {'form': form, 'accion': 'Crear'})
 
 
+@login_required
 def animal_baja(request, crotal):
     """Dar de baja un animal (defensivo ante crotales históricos)."""
     animal = Animal.objects.filter(crotal=crotal, estado_vital='VIVO').first()
@@ -282,6 +299,7 @@ def animal_baja(request, crotal):
     return render(request, 'ganaderia/animal_baja.html', {'animal': animal, 'form': form})
 
 
+@login_required
 def animal_traslado(request, crotal):
     """Trasladar un animal a otra finca/sub_ubicación (defensivo ante crotales históricos)."""
     animal = Animal.objects.filter(crotal=crotal, estado_vital='VIVO').first()
@@ -322,6 +340,7 @@ def animal_traslado(request, crotal):
     })
 
 
+@login_required
 def parto_create(request):
     """Registrar un nuevo parto (1 o 2 crías obligatorias)."""
     madre_crotal = request.GET.get('madre')
@@ -393,6 +412,7 @@ def parto_create(request):
     return render(request, 'ganaderia/parto_form.html', {'form': form})
 
 
+@login_required
 def parto_edit(request, pk):
     """Editar la fecha u observaciones de un parto existente (recalcula intervalo)."""
     parto = get_object_or_404(Parto.objects.select_related('madre'), pk=pk)
@@ -410,6 +430,7 @@ def parto_edit(request, pk):
     return render(request, 'ganaderia/parto_edit.html', {'parto': parto, 'form': form})
 
 
+@login_required
 def finca_list(request):
     """Listado de fincas y sus recintos."""
     fincas = Finca.objects.prefetch_related('ubicaciones', 'animales').all()
@@ -431,6 +452,7 @@ def finca_list(request):
     return render(request, 'ganaderia/finca_list.html', {'resumen_fincas': resumen_fincas})
 
 
+@login_required
 def finca_create(request):
     """Crear una nueva finca con sus recintos."""
     explotacion = Explotacion.objects.first()
@@ -456,6 +478,7 @@ def finca_create(request):
     return render(request, 'ganaderia/finca_form.html', {'form': form})
 
 
+@login_required
 def finca_delete(request, pk):
     """
     Asistente de eliminación y vaciado de finca:
@@ -534,6 +557,7 @@ def finca_delete(request, pk):
     })
 
 
+@login_required
 def incidencias(request):
     """Vista de incidencias y histórico de bajas (Pestañas)."""
     q_baja = request.GET.get('q_baja', '').strip()
@@ -569,6 +593,7 @@ def incidencias(request):
     })
 
 
+@login_required
 def incidencia_rectificar(request, pk):
     """
     Rectifica la fecha de un parto en conflicto.
@@ -656,6 +681,7 @@ def incidencia_rectificar(request, pk):
     })
 
 
+@login_required
 @require_POST
 def incidencias_bajas_purgar(request):
     """
@@ -675,6 +701,7 @@ def incidencias_bajas_purgar(request):
     return redirect(reverse('incidencias') + '?tab=bajas')
 
 
+@login_required
 @require_POST
 def incidencias_alertas_limpiar(request):
     """
@@ -710,6 +737,7 @@ class Echo:
         return value
 
 
+@login_required
 def exportar_csv(request):
     """Exportación de censo filtrado a archivo CSV Oficial en streaming bajo demanda (cero consumo acumulativo de RAM)."""
     animales = get_filtered_animales(request, with_annotations=True)
@@ -760,6 +788,7 @@ def exportar_csv(request):
     return response
 
 
+@login_required
 def exportar_excel(request):
     """Exportación de censo filtrado a libro Excel (.xlsx) (optimizado para evitar N+1 queries)."""
     animales = get_filtered_animales(request, with_annotations=True)
@@ -819,6 +848,7 @@ def exportar_excel(request):
     return response
 
 
+@login_required
 def api_validar_crotal(request):
     """Endpoint HTMX/AJAX para validar crotal en tiempo real."""
     crotal = request.GET.get('crotal', '')
@@ -826,6 +856,7 @@ def api_validar_crotal(request):
     return JsonResponse(resultado)
 
 
+@login_required
 @csrf_exempt
 def asistente_preview(request):
     """
@@ -998,6 +1029,7 @@ def asistente_preview(request):
     })
 
 
+@login_required
 @csrf_exempt
 def asistente_ejecutar(request):
     """
@@ -1086,6 +1118,7 @@ def asistente_ejecutar(request):
         return redirect('home')
 
 
+@login_required
 @csrf_exempt
 def asistente_lote_preview(request):
     """
@@ -1212,6 +1245,7 @@ def asistente_lote_preview(request):
     })
 
 
+@login_required
 @csrf_exempt
 def asistente_lote_ejecutar(request):
     """

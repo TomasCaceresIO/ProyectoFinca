@@ -6,6 +6,7 @@ from django.test import TestCase, Client, TransactionTestCase, override_settings
 from django.db import IntegrityError
 from django.urls import reverse
 from django.utils import timezone
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Ubicacion
 from ganaderia.services.ai_assistant import (
     normalizar_crotal,
@@ -19,6 +20,9 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
     """Pruebas de concurrencia, restricciones de BD, rendimiento y resiliencia."""
 
     def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         Explotacion.objects.all().delete()
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Resiliencia",
@@ -117,7 +121,7 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
         ]
         Animal.objects.bulk_create(animales)
 
-        client = Client()
+        client = self.client
 
         # Medir tiempo de respuesta en la página 1
         t_start = time.perf_counter()
@@ -190,7 +194,7 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
         """
         from django.core.files.uploadedfile import SimpleUploadedFile
         pdf_dummy = SimpleUploadedFile("censo.pdf", b"DATOS_BINARIOS_INVALIDOS_SIN_TEXTO", content_type="application/pdf")
-        client = Client()
+        client = self.client
         res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_dummy})
         self.assertEqual(res.status_code, 200)
         self.assertContains(res, "No se pudo extraer texto digital del documento PDF adjunto")
@@ -224,7 +228,7 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
 
             from django.core.files.uploadedfile import SimpleUploadedFile
             pdf_file = SimpleUploadedFile("censo.pdf", b"%PDF-1.4 dummy", content_type="application/pdf")
-            client = Client()
+            client = self.client
             res = client.post(reverse('asistente_lote_preview'), {'archivo': pdf_file})
 
             self.assertEqual(res.status_code, 200)
@@ -242,7 +246,7 @@ class ResilienceAndScaleTestCase(TransactionTestCase):
             mock_client.chat.completions.create.side_effect = Exception("Service unavailable 503")
             mock_groq_cls.return_value = mock_client
 
-            client = Client()
+            client = self.client
             res = client.post(reverse('asistente_lote_preview'), {'texto': "Añade al pasto los animales 7001 macho limusin y 7002 hembra"})
             self.assertEqual(res.status_code, 200)
             self.assertContains(res, "7001")

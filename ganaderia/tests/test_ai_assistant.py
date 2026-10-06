@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from django.test import TestCase, Client, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Incidencia, Ubicacion
 from ganaderia.services.ai_assistant import (
     procesar_comando_parto,
@@ -17,6 +18,8 @@ from ganaderia.services.animal_services import registrar_parto
 class AIAssistantTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación IA Test",
             codigo_rega="ES123456789012"
@@ -453,6 +456,7 @@ class AIAssistantTestCase(TestCase):
     def test_csrf_enforced_requests_succeed(self):
         """8. Test de protección CSRF: peticiones con enforce_csrf_checks=True no son bloqueadas con 403."""
         csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client.force_login(self.user)
         url_preview = reverse('asistente_preview')
         response = csrf_client.post(url_preview, {
             'texto': 'La 3014 parió hoy ternera 7777 retinta'

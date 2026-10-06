@@ -5,6 +5,7 @@ from datetime import date
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.core.exceptions import ValidationError
+from django.contrib.auth.models import User
 
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Ubicacion
 from ganaderia.services.ai_assistant import _extraer_comando_parto_regex
@@ -14,6 +15,8 @@ from ganaderia.services.animal_services import registrar_parto
 class FincasPartosIATestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Fincas Partos",
             codigo_rega="ES123456789777"

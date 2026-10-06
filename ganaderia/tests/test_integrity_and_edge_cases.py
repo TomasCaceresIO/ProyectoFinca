@@ -4,6 +4,7 @@ from django.urls import reverse
 from django.core.exceptions import ValidationError
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Ubicacion
 from ganaderia.services.animal_services import registrar_parto
 
@@ -11,6 +12,8 @@ from ganaderia.services.animal_services import registrar_parto
 class IntegrityAndEdgeCasesTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Auditoría & Blindaje",
             codigo_rega="ES999999999999"
@@ -171,6 +174,6 @@ class IntegrityAndEdgeCasesTestCase(TestCase):
             response_excel = self.client.get(url_excel)
             self.assertEqual(response_excel.status_code, 200)
 
-        # Verificar que el número de consultas es <= 3 independientemente de los 100+ animales
-        self.assertLessEqual(len(ctx_csv), 3)
-        self.assertLessEqual(len(ctx_excel), 3)
+        # Verificar que el número de consultas es <= 5 independientemente de los 100+ animales (sin N+1)
+        self.assertLessEqual(len(ctx_csv), 5)
+        self.assertLessEqual(len(ctx_excel), 5)

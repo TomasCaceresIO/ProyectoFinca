@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+
+{% block title %}Iniciar Sesión - Gestión Ganadera{% endblock %}
+
+{% block content %}
+<div style="min-height: calc(100vh - 180px); display: flex; align-items: center; justify-content: center; padding: 2rem 1rem;">
+    <div class="card" style="width: 100%; max-width: 440px; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1); border-radius: 12px; border: 1px solid #e2e8f0; background: #ffffff;">
+        <div class="card-header" style="text-align: center; padding: 2rem 1.5rem 1.25rem 1.5rem; background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">🔒</div>
+            <h2 style="font-size: 1.35rem; font-weight: 700; color: #1e293b; margin: 0;">Gestión Ganadera - Acceso Exclusivo</h2>
+            <p style="font-size: 0.875rem; color: #64748b; margin-top: 0.4rem; margin-bottom: 0;">Introduce tus credenciales autorizadas para acceder a la plataforma.</p>
+        </div>
+        <div class="card-body" style="padding: 1.75rem 1.5rem;">
+            {% if form.errors %}
+            <div style="background-color: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.875rem; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;" role="alert">
+                <span style="font-size: 1.2rem;">⚠️</span>
+                <div>
+                    <strong>Credenciales incorrectas:</strong> El usuario o la contraseña introducidos no son válidos. Por favor, inténtalo de nuevo.
+                </div>
+            </div>
+            {% endif %}
+
+            <form method="post" action="{% url 'login' %}">
+                {% csrf_token %}
+                {% if next %}
+                <input type="hidden" name="next" value="{{ next }}">
+                {% endif %}
+
+                <div class="form-group" style="margin-bottom: 1.25rem;">
+                    <label class="form-label" for="id_username" style="font-weight: 600; color: #334155; font-size: 0.875rem; margin-bottom: 0.375rem; display: block;">Usuario *</label>
+                    <input type="text" name="username" autofocus required id="id_username" class="form-control" placeholder="Nombre de usuario" value="{{ form.username.value|default:'' }}" style="width: 100%; padding: 0.625rem 0.875rem; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; box-sizing: border-box;">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 1.5rem;">
+                    <label class="form-label" for="id_password" style="font-weight: 600; color: #334155; font-size: 0.875rem; margin-bottom: 0.375rem; display: block;">Contraseña *</label>
+                    <input type="password" name="password" required id="id_password" class="form-control" placeholder="••••••••" style="width: 100%; padding: 0.625rem 0.875rem; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.95rem; box-sizing: border-box;">
+                </div>
+
+                <button type="submit" class="btn btn-primary" style="width: 100%; padding: 0.75rem 1rem; font-size: 1rem; font-weight: 600; justify-content: center; border-radius: 6px; box-shadow: 0 2px 4px rgba(45, 106, 79, 0.2); cursor: pointer;">
+                    Iniciar Sesión
+                </button>
+            </form>
+        </div>
+        <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 0.75rem 1.5rem; text-align: center;">
+            <span style="font-size: 0.75rem; color: #94a3b8;">Sistema privado de gestión de censo e incidencias</span>
+        </div>
+    </div>
+</div>
+{% endblock %}

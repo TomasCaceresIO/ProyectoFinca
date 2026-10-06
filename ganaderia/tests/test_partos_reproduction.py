@@ -1,6 +1,7 @@
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.core.exceptions import ValidationError
+from django.contrib.auth.models import User
 from datetime import date, timedelta
 from ganaderia.models import Explotacion, Finca, Animal, Parto
 from ganaderia.services.animal_services import registrar_parto, validar_intervalo_parto, actualizar_parto
@@ -24,6 +25,8 @@ class PartosReproductionTestCase(TestCase):
             sub_ubicacion="PASTO"
         )
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
 
     def test_270_days_rule(self):
         """Parto a 269 días activa alerta_intervalo=True. Parto a 270 días lo deja en False."""

@@ -1,5 +1,6 @@
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.contrib.auth.models import User
 from datetime import date
 from ganaderia.models import Explotacion, Finca, Animal, Ubicacion, Parto
 
@@ -7,6 +8,8 @@ from ganaderia.models import Explotacion, Finca, Animal, Ubicacion, Parto
 class FincaDeletionAndExportTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Deletion & Export",
             codigo_rega="ES555555555555"

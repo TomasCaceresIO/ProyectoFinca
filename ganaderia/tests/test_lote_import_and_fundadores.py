@@ -3,6 +3,7 @@ from unittest.mock import patch, MagicMock
 from django.test import TestCase, Client
 from django.urls import reverse
 from django.utils import timezone
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Ubicacion
 from ganaderia.services.ai_assistant import procesar_importacion_lote, _extraer_lote_regex
 
@@ -12,6 +13,8 @@ class LoteImportAndFundadoresTestCase(TestCase):
 
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Fundadores",
             codigo_rega="ES111222333444"

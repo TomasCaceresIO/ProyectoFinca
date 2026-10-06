@@ -1,11 +1,14 @@
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Ubicacion
 
 
 class FincaCreationTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Fincas",
             codigo_rega="ES111122223333"

@@ -12,6 +12,7 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from django.contrib.auth.models import User
 
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Incidencia, Ubicacion
 from ganaderia.forms import AnimalForm
@@ -28,6 +29,8 @@ from ganaderia.services.animal_services import (
 class FullAuditAndEdgeCasesTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Auditoría Total",
             codigo_rega="ES123456789099"

@@ -1,4 +1,7 @@
-from django.test import TestCase
+from django.test import TestCase, Client
+from django.urls import reverse
+from django.contrib.auth.models import User
+from ganaderia.models import Explotacion, Finca, Ubicacion
 from ganaderia.services.ai_assistant import _extraer_tabla_pdf_dinamica, _extraer_lote_regex
 
 
@@ -8,6 +11,14 @@ class DynamicPDFParserTestCase(TestCase):
     Verifica que el orden de columnas arbitrario/variable se mapee correctamente
     y que los crotales de 4 dígitos no se confundan con años, números de orden o fechas.
     """
+    def setUp(self):
+        self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
+        self.explotacion = Explotacion.objects.create(nombre="Exp PDF", codigo_rega="ES123456789012")
+        self.finca = Finca.objects.create(explotacion=self.explotacion, nombre="Finca Test")
+        Ubicacion.objects.create(finca=self.finca, tipo_ubicacion="PASTO")
+
 
     def test_orden_columnas_formato_a(self):
         """
