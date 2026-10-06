@@ -1,6 +1,7 @@
 from datetime import date
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Incidencia, Ubicacion
 from ganaderia.services.animal_services import registrar_parto, dar_de_baja_animal
 
@@ -12,6 +13,8 @@ class IncidenciasLifecycleAndPurgeTestCase(TestCase):
     """
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Incidencias QA",
             codigo_rega="ES999999999999"

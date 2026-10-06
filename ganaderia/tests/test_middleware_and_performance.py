@@ -1,5 +1,6 @@
 from django.test import TestCase, Client
 from django.urls import reverse
+from django.contrib.auth.models import User
 from datetime import date
 from ganaderia.models import Explotacion, Finca, Animal, Parto
 
@@ -7,6 +8,8 @@ from ganaderia.models import Explotacion, Finca, Animal, Parto
 class MiddlewareAndPerformanceTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
 
     def test_onboarding_middleware_redirection_and_no_loop(self):
         """Sin explotación en BD: Petición a / devuelve 302 a /setup/. Petición a /setup/ devuelve 200 (sin bucle)."""
@@ -35,7 +38,7 @@ class MiddlewareAndPerformanceTestCase(TestCase):
                 sub_ubicacion="PASTO"
             )
 
-        # La consulta debe ejecutar un número constante de queries (10 con el context processor del contador global) sin sufrir N+1
-        with self.assertNumQueries(10):
+        # La consulta debe ejecutar un número constante de queries (12 con sesión autenticada y context processor) sin sufrir N+1
+        with self.assertNumQueries(12):
             res = self.client.get(reverse('home'))
             self.assertEqual(res.status_code, 200)

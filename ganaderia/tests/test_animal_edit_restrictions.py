@@ -3,6 +3,7 @@ from django.test import TestCase, Client
 from django.urls import reverse
 from django.core.exceptions import ValidationError
 from django.utils import timezone
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Ubicacion
 from ganaderia.forms import AnimalForm
 from ganaderia.services.animal_services import registrar_parto
@@ -11,6 +12,8 @@ from ganaderia.services.animal_services import registrar_parto
 class AnimalEditRestrictionsTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Edit Tests",
             codigo_rega="ES888777666555"

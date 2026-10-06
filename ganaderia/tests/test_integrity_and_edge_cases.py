@@ -4,6 +4,7 @@ from django.urls import reverse
 from django.core.exceptions import ValidationError
 from django.test.utils import CaptureQueriesContext
 from django.db import connection
+from django.contrib.auth.models import User
 from ganaderia.models import Explotacion, Finca, Animal, Parto, Ubicacion
 from ganaderia.services.animal_services import registrar_parto
 
@@ -11,6 +12,8 @@ from ganaderia.services.animal_services import registrar_parto
 class IntegrityAndEdgeCasesTestCase(TestCase):
     def setUp(self):
         self.client = Client()
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Auditoría & Blindaje",
             codigo_rega="ES999999999999"
@@ -74,6 +77,44 @@ class IntegrityAndEdgeCasesTestCase(TestCase):
         self.assertIsNotNone(parto.cria)
         self.assertIsNotNone(parto.cria2)
 
+    def test_tres_partos_misma_fecha_dispara_alerta_o_falla(self):
+        """Test de 3 partos en la misma fecha: 2 partos son gemelos (alerta=False), un 3er parto dispara Alerta Roja / alerta_intervalo = True o falla."""
+        fecha_parto = date(2023, 8, 1)
+        # Parto 1 en esa fecha
+        res1 = registrar_parto(
+            madre=self.madre_adulta,
+            fecha_parto=fecha_parto,
+            crias=[{'crotal': '5001', 'sexo': 'M'}]
+        )
+        self.assertFalse(res1['parto'].alerta_intervalo)
+
+        # Parto 2 en esa fecha (segundo del gemelo)
+        res2 = registrar_parto(
+            madre=self.madre_adulta,
+            fecha_parto=fecha_parto,
+            crias=[{'crotal': '5002', 'sexo': 'H'}]
+        )
+        self.assertFalse(res2['parto'].alerta_intervalo)
+
+        # Intento de registrar un 3er parto en esa misma fecha exacta sin forzar -> debe fallar por validación
+        with self.assertRaises(ValidationError):
+            registrar_parto(
+                madre=self.madre_adulta,
+                fecha_parto=fecha_parto,
+                forzar=False,
+                crias=[{'crotal': '5003', 'sexo': 'M'}]
+            )
+
+        # Si se fuerza, debe marcar alerta_intervalo = True
+        res3 = registrar_parto(
+            madre=self.madre_adulta,
+            fecha_parto=fecha_parto,
+            forzar=True,
+            crias=[{'crotal': '5003', 'sexo': 'M'}]
+        )
+        self.assertTrue(res3['parto'].alerta_intervalo)
+        self.assertEqual(res3['alerta'], 'ROJO')
+
     def test_rollback_atomico(self):
         """4. Test Rollback Atómico: fallo en la 2ª cría no debe dejar ni el parto ni la 1ª cría guardados."""
         # Crear animal activo con crotal 4002 para provocar fallo de duplicidad bloqueante en la 2ª cría
@@ -133,6 +174,6 @@ class IntegrityAndEdgeCasesTestCase(TestCase):
             response_excel = self.client.get(url_excel)
             self.assertEqual(response_excel.status_code, 200)
 
-        # Verificar que el número de consultas es <= 3 independientemente de los 100+ animales
-        self.assertLessEqual(len(ctx_csv), 3)
-        self.assertLessEqual(len(ctx_excel), 3)
+        # Verificar que el número de consultas es <= 5 independientemente de los 100+ animales (sin N+1)
+        self.assertLessEqual(len(ctx_csv), 5)
+        self.assertLessEqual(len(ctx_excel), 5)

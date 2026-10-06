@@ -16,6 +16,8 @@ class OnboardingMiddleware:
         '/admin/',
         '/static/',
         '/media/',
+        '/healthcheck/',
+        '/accounts/',
     ]
 
     def __init__(self, get_response):

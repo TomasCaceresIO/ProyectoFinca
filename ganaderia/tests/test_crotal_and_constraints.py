@@ -1,6 +1,8 @@
 from django.test import TestCase
 from django.db.utils import IntegrityError
 from django.core.exceptions import ValidationError
+from django.contrib.auth.models import User
+from django.urls import reverse
 from datetime import date
 from ganaderia.models import Explotacion, Finca, Animal
 from ganaderia.services.animal_services import validar_crotal, dar_de_baja_animal
@@ -8,6 +10,8 @@ from ganaderia.services.animal_services import validar_crotal, dar_de_baja_anima
 
 class CrotalAndConstraintsTestCase(TestCase):
     def setUp(self):
+        self.user = User.objects.create_user(username="testuser", password="password")
+        self.client.force_login(self.user)
         self.explotacion = Explotacion.objects.create(
             nombre="Explotación Test",
             codigo_rega="ES123456789012"
